@@ -18,12 +18,18 @@
 
 #define PERIOD_MS 4 /* 4ms - 250Hz */
 
+#define PULSE_INPUT_PIN D2
+
+volatile unsigned long pulseCount = 0;  // Stores pulse count
+
 int needleValve0 = 0;
-int needleValve1 = 0;
-int needleValve2 = 0;
-int needleValve3 = 0;
+//int needleValve1 = 0;
+//int needleValve2 = 0;
+//int needleValve3 = 0;
 
 float voltage = 0;
+
+uint16_t readings = 0;
 
 void setup() {
   Serial.begin(9600);
@@ -31,28 +37,41 @@ void setup() {
     ; // wait for serial port to connect.
   }
 
+  pinMode(PULSE_INPUT_PIN, INPUT_PULLUP);  // Set as input
+  attachInterrupt(digitalPinToInterrupt(PULSE_INPUT_PIN), handlePulse, FALLING);
+
   MachineControl_AnalogOut.begin();
 
   MachineControl_AnalogOut.setPeriod(needleValve0, PERIOD_MS); 
-  MachineControl_AnalogOut.setPeriod(needleValve1, PERIOD_MS);
-  MachineControl_AnalogOut.setPeriod(needleValve2, PERIOD_MS);
-  MachineControl_AnalogOut.setPeriod(needleValve3, PERIOD_MS);
+//  MachineControl_AnalogOut.setPeriod(needleValve1, PERIOD_MS);
+//  MachineControl_AnalogOut.setPeriod(needleValve2, PERIOD_MS);
+//  MachineControl_AnalogOut.setPeriod(needleValve3, PERIOD_MS);
+
+
 }
 
 void loop() {
   MachineControl_AnalogOut.write(needleValve0, voltage);
-  MachineControl_AnalogOut.write(needleValve1, voltage);
-  MachineControl_AnalogOut.write(needleValve2, voltage);
-  MachineControl_AnalogOut.write(needleValve3, voltage);
+//  MachineControl_AnalogOut.write(needleValve1, voltage);
+//  MachineControl_AnalogOut.write(needleValve2, voltage);
+//  MachineControl_AnalogOut.write(needleValve3, voltage);
 
-  Serial.println("All channels set at " + String(voltage) + "V");
+  Serial.println("needleValve0 set at " + String(voltage) + "V");
   
   voltage = voltage + 0.1;
-  /* Maximum output value is 10.5V */
-  if (voltage >= 10.5) {
+  /* Maximum output value is 10.0V */
+  if (voltage >= 10.0) {
     voltage = 0;
-    delay(100); /* Additional 100 ms delay introduced to manage 10.5V -> 0V fall time of 150 ms */
+    delay(100); /* Additional 100 ms delay introduced to manage 10.0V -> 0V fall time of 150 ms */
   }
 
   delay(100);
+    Serial.print("Pulses counted: ");
+    Serial.println(pulseCount);
+}
+
+// Interrupt Service Routine (ISR) - runs on each rising edge
+void handlePulse() {
+  pulseCount++;
+      Serial.print("INT!");
 }
