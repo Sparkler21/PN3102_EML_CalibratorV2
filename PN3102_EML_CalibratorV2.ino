@@ -15,6 +15,18 @@
 //#define NEEDLE_VALVE_3 2
 //#define NEEDLE_VALVE_4 3
 
+// Define operation modes
+enum OperationMode {
+  MODE_IDLE = 1,
+  MODE_SETUP,
+  MODE_BALANCE,
+  MODE_TEST,
+  MODE_ERROR,
+  MODE_SHUTDOWN
+};
+
+OperationMode mode = MODE_IDLE;
+
 //  Voltage levels (0-10V) to control water flow
 float voltageNV1 = 0;
 //float voltageNV2 = 0;
@@ -31,14 +43,14 @@ unsigned long pulseCountRG1B = 0;   // total pulses counted on RG1 chB
 //unsigned long pulseCountRG4A = 0;   // total pulses counted on RG4 chA
 //unsigned long pulseCountRG4B = 0;   // total pulses counted on RG4 chB
 // Raingauge channel last states
-bool lastPulseStateRG1A = HIGH;     // last pin state for edge detection on RG1 chA
-bool lastPulseStateRG1B = HIGH;     // last pin state for edge detection on RG1 chB
-//bool lastPulseStateRG2A = HIGH;     // last pin state for edge detection on RG2 chA
-//bool lastPulseStateRG2B = HIGH;     // last pin state for edge detection on RG2 chB
-//bool lastPulseStateRG3A = HIGH;     // last pin state for edge detection on RG3 chA
-//bool lastPulseStateRG3B = HIGH;     // last pin state for edge detection on RG3 chB
-//bool lastPulseStateRG4A = HIGH;     // last pin state for edge detection on RG4 chA
-//bool lastPulseStateRG4B = HIGH;     // last pin state for edge detection on RG4 chB
+bool lastPulseStateRG1A = LOW;     // last pin state for edge detection on RG1 chA
+bool lastPulseStateRG1B = LOW;     // last pin state for edge detection on RG1 chB
+//bool lastPulseStateRG2A = LOW;     // last pin state for edge detection on RG2 chA
+//bool lastPulseStateRG2B = LOW;     // last pin state for edge detection on RG2 chB
+//bool lastPulseStateRG3A = LOW;     // last pin state for edge detection on RG3 chA
+//bool lastPulseStateRG3B = LOW;     // last pin state for edge detection on RG3 chB
+//bool lastPulseStateRG4A = LOW;     // last pin state for edge detection on RG4 chA
+//bool lastPulseStateRG4B = LOW;     // last pin state for edge detection on RG4 chB
 // Raingauge channel current states
 bool currentPulseStateRG1A = LOW;  // last pin state for edge detection on RG1 chA
 bool currentPulseStateRG1B = LOW;  // last pin state for edge detection on RG1 chb
@@ -57,6 +69,8 @@ unsigned long lastSerialCheck = 0;
 unsigned long lastHeartbeat = 0;
 bool heartbeatState = false;
 
+bool running = 0;
+
 void setup() {
   // Initialize USB Serial
   Serial.begin(115200);
@@ -64,8 +78,7 @@ void setup() {
   serialActive = Serial;  //Serial comms watchdog to prevent lock up
 
   if (serialActive) {
-    Serial.println("USB Serial active");
-    Serial.println("EML Calibrator started...");
+    Serial.println("*********EML Calibrator*********");
   }
 
   //Set over current behavior of all solenoid digital channels to latch mode (true)
@@ -97,19 +110,84 @@ void setup() {
 //  solenoid_controller(SOLENOID_4, LOW);  // Turn off solenoid 4
 
   delay(1000);  // allow setups to settle 
+
+  Serial.println("Enter a number to choose a mode:");
+  Serial.println("1. IDLE");
+  Serial.println("2. SETUP");
+  Serial.println("3. BALANCE");
+  Serial.println("4. TEST");  
+  Serial.println("5. ERROR");
+  Serial.println("6. SHUTDOWN");
+
 }
 
 void loop() {
 
-  needleValve_controller(); // Set voltages on the four needleValves 
+  if (Serial.available() > 0) {
+    int choice = Serial.parseInt();   // read integer from Serial
+    mode = (OperationMode)choice;
 
-  read_raingauges();  //read status of rain gauges and increment counts
+    switch (mode) {
+      case MODE_IDLE:
+        Serial.println("System is in IDLE mode.");
+            // Show menu again for next input
+        Serial.println("\nEnter a number to choose a mode:");
+        Serial.println("1. IDLE");
+        Serial.println("2. SETUP");
+        Serial.println("3. BALANCE");
+        Serial.println("4. TEST");  
+        Serial.println("5. ERROR");
+        Serial.println("6. SHUTDOWN");
+        break;
 
-  serial_debug();  //Output serial comms
+      case MODE_SETUP:
+        Serial.println("System is in SETUP.");
+        //
+        running = 1; 
+        while(running == 1){
 
-  led_heartbeat();  //  Pulse D I/O ch0 as a heartbeat - Code running!
+          needleValve_controller(); // Set voltages on the four needleValves 
 
-  delay(10);  // small delay to reduce CPU usage
+          read_raingauges();  //read status of rain gauges and increment counts
+
+          serial_debug();  //Output serial comms
+
+          led_heartbeat();  //  Pulse D I/O ch0 as a heartbeat - Code running!
+
+          delay(10);  // small delay to reduce CPU usage
+
+        }
+        break;
+
+      case MODE_BALANCE:
+        Serial.println("System is in BALANCE TEST.");
+        // 
+        break;
+
+      case MODE_TEST:
+        Serial.println("System is in mm/hr TEST.");
+        // 
+        break;
+
+      case MODE_ERROR:
+        Serial.println("System encountered an ERROR!");
+        // You might trigger an alarm or safe state here
+        break;
+
+      case MODE_SHUTDOWN:
+        Serial.println("System is SHUTTING DOWN.");
+        // Could set outputs low, disable actuators, etc.
+        while (true) {
+          delay(1000); // stop here forever
+        }
+        break;
+
+      default:
+//        Serial.println("Invalid choice! Enter 1-4.");
+        break;
+    }
+
+  }
 
 }
 
