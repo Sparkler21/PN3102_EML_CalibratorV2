@@ -1,0 +1,66 @@
+Node‑RED Dashboard — Starter Flow (import this JSON)
+
+Client: Modbus TCP to 192.168.1.50:502.
+
+Reads: Input Registers 0..39 every 500 ms; Discrete Inputs 0..15 every 500 ms.
+
+Writes: Coils for Start/Stop/Reset; Holding Register 500 (heartbeat) every 2 s; basic setpoints.
+
+In Node‑RED, menu → Import → paste JSON → Import. Install node-red-contrib-modbus and node-red-dashboard first.
+
+
+
+
+
+
+[
+{"id":"tab1","type":"tab","label":"Calibration HMI","disabled":false,"info":""},
+{"id":"ui_tab_over","type":"ui_tab","z":"tab1","name":"Overview","icon":"dashboard","order":1},
+{"id":"ui_grp_main","type":"ui_group","z":"tab1","name":"Main","tab":"ui_tab_over","order":1,"disp":true,"width":12},
+
+
+{"id":"mb_client","type":"modbus-client","z":"","name":"PMC","clienttype":"tcp","bufferCommands":true,"stateLogEnabled":false,"tcpHost":"192.168.1.50","tcpPort":"502","unit_id":"1","reconnectOnTimeout":true,"timeout":"2000","reconnectTimeout":"2000","parallelUnitIdsAllowed":true},
+
+
+{"id":"read_ir","type":"modbus-read","z":"tab1","name":"Read IR 0..39","topic":"","showStatusActivities":true,"logIOActivities":false,"showErrors":true,"showWarnings":true,"unitid":"1","dataType":"InputRegister","adr":"0","quantity":"40","rate":"500","rateUnit":"ms","delayOnStart":false,"startDelayTime":"","server":"mb_client","useIOFile":false,"ioFile":"","useIOForPayload":false,"emptyMsgOnFail":false,"keepMsgProperties":false},
+{"id":"read_di","type":"modbus-read","z":"tab1","name":"Read DI 0..15","topic":"","showStatusActivities":true,"logIOActivities":false,"showErrors":true,"showWarnings":true,"unitid":"1","dataType":"CoilDiscreteInput","adr":"0","quantity":"16","rate":"500","rateUnit":"ms","delayOnStart":false,"startDelayTime":"","server":"mb_client","useIOFile":false,"ioFile":"","useIOForPayload":false,"emptyMsgOnFail":false,"keepMsgProperties":false},
+
+
+{"id":"fn_parse_ir","type":"function","z":"tab1","name":"Parse IR","func":"// Combine 32-bit values and map into msg fields\nconst w = msg.payload; // array of 16-bit\nfunction i32(lo,hi){ const v = (hi<<16) | lo; return (v & 0x80000000)? (v|0): v; }\nconst mass_lo=w[0], mass_hi=w[1];\nconst flow_lo=w[2], flow_hi=w[3];\nconst valve_mv=w[4];\nconst state=w[5];\nconst fault=w[6];\nconst err_lo=w[10], err_hi=w[11];\nconst hb_echo=w[20];\nmsg.data={\n mass_g: (i32(mass_lo,mass_hi))/10.0,\n flow_gps: (i32(flow_lo,flow_hi))/10.0,\n valve_mv: valve_mv,\n state: state,\n fault: fault,\n err_gps: (i32(err_lo,err_hi))/10.0,\n hb_echo: hb_echo\n};\nreturn msg;","outputs":1,"noerr":false,"initialize":"","finalize":"","libs":[]},
+
+
+{"id":"ui_gauge_mass","type":"ui_gauge","z":"tab1","name":"Mass (g)","group":"ui_grp_main","order":1,"width":6,"height":4,"gtype":"gage","title":"Mass (g)","label":"g","format":"{{value}}","min":0,"max":5000,"seg1":0,"seg2":0,"seg3":0,"x":0,"y":0,"property":"data.mass_g","propertyType":"msg","chartMin":0,"chartMax":0,"levelColors":["#ff0000","#f9c802","#00ff00"],"tickmode":"auto","ticks":"","decimals":"1","colorschema":"rainbow","seg1value":"","seg2value":"","className":""},
+{"id":"ui_chart_flow","type":"ui_chart","z":"tab1","name":"Flow (g/s)","group":"ui_grp_main","order":2,"width":6,"height":4,"label":"Flow (g/s)","chartType":"line","legend":"false","xformat":"HH:mm:ss","interpolate":"linear","nodata":"","dot":false,"ymin":"0","ymax":"","removeOlder":"12","removeOlderPoints":"","removeOlderUnit":"3600","cutout":0,"useOneColor":false,"colors":["#1f77b4"],"useOldStyle":false,"x":0,"y":0,"outputs":1},
+{"id":"ui_text_state","type":"ui_text","z":"tab1","group":"ui_grp_main","order":3,"width":6,"height":1,"name":"State","label":"State","format":"{{msg.text}}","layout":"row-spread"},
+{"id":"fn_state_text","type":"function","z":"tab1","name":"State text","func":"const s=msg.data.state; const map={0:'IDLE',1:'FILL',2:'BALANCE_TEST',3:'TEST',4:'SHUTDOWN'}; msg.text=map[s]||('FAULT '+s); return msg;"},
+
+
+{"id":"link_ir_to_ui1","type":"link","z":"tab1","links":[]},
+
+
+{"id":"hb_inject","type":"inject","z":"tab1","name":"HB tick 2s","props":[{"p":"payload"},{"p":"topic","vt":"str"}],"repeat":"2","once":true,"onceDelay":0.5,"topic":"","payload":"","payloadType":"date"},
+{"id":"fn_hb_inc","type":"function","z":"tab1","name":"Increment seq","func":"flow.set('seq',(flow.get('seq')||0)+1); msg.payload=flow.get('seq'); return msg;"},
+{"id":"mb_write_hb","type":"modbus-write","z":"tab1","name":"Write HR 500","showStatusActivities":true,"showErrors":true,"unitid":"1","dataType":"HoldingRegister","adr":"500","quantity":"1","server":"mb_client","emptyMsgOnFail":false,"keepMsgProperties":false,"x":0,"y":0,"value":"","valueType":"msg","usePromise":false},
+
+
+{"id":"btn_start","type":"ui_button","z":"tab1","name":"Start","group":"ui_grp_main","order":4,"width":3,"height":1,"passthru":false,"label":"Start","tooltip":"","color":"","bgcolor":"","icon":"play_arrow","payload":"true","payloadType":"bool","topic":"","x":0,"y":0},
+{"id":"btn_stop","type":"ui_button","z":"tab1","name":"Stop","group":"ui_grp_main","order":5,"width":3,"height":1,"passthru":false,"label":"Stop","tooltip":"","color":"","bgcolor":"","icon":"stop","payload":"true","payloadType":"bool","topic":"","x":0,"y":0},
+{"id":"btn_reset","type":"ui_button","z":"tab1","name":"Reset Faults","group":"ui_grp_main","order":6,"width":3,"height":1,"passthru":false,"label":"Reset","icon":"refresh","payload":"true","payloadType":"bool"},
+{"id":"mb_write_start","type":"modbus-write","z":"tab1","name":"Coil 0 Start","showStatusActivities":false,"showErrors":true,"unitid":"1","dataType":"Coil","adr":"0","quantity":"1","server":"mb_client","emptyMsgOnFail":false,"keepMsgProperties":false},
+{"id":"mb_write_stop","type":"modbus-write","z":"tab1","name":"Coil 1 Stop","showStatusActivities":false,"showErrors":true,"unitid":"1","dataType":"Coil","adr":"1","quantity":"1","server":"mb_client","emptyMsgOnFail":false,"keepMsgProperties":false},
+{"id":"mb_write_reset","type":"modbus-write","z":"tab1","name":"Coil 2 Reset","showStatusActivities":false,"showErrors":true,"unitid":"1","dataType":"Coil","adr":"2","quantity":"1","server":"mb_client","emptyMsgOnFail":false,"keepMsgProperties":false}
+]
+
+
+
+
+
+Wire the nodes in the editor like this:
+
+read_ir → fn_parse_ir → [ui_gauge_mass, ui_chart_flow, fn_state_text → ui_text_state]
+
+hb_inject → fn_hb_inc → mb_write_hb
+
+btn_start → mb_write_start, btn_stop → mb_write_stop, btn_reset → mb_write_reset
+
+(Optional) Add DI reads to gray‑out buttons when ST_REMOTE_ENABLED is false.
