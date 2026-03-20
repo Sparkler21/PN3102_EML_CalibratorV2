@@ -69,8 +69,6 @@ unsigned long lastSerialCheck = 0;
 unsigned long lastHeartbeat = 0;
 bool heartbeatState = false;
 
-bool running = 0;
-
 void setup() {
   // Initialize USB Serial
   Serial.begin(115200);
@@ -121,74 +119,111 @@ void setup() {
 
 }
 
+void printMenu() {
+  Serial.println("\nEnter a number to choose a mode:");
+  Serial.println("1. IDLE");
+  Serial.println("2. SETUP");
+  Serial.println("3. BALANCE");
+  Serial.println("4. TEST");
+  Serial.println("5. ERROR");
+  Serial.println("6. SHUTDOWN");
+  Serial.println("0. Exit current mode / return to menu");
+}
+
 void loop() {
 
+  // Always check serial input
   if (Serial.available() > 0) {
-    int choice = Serial.parseInt();   // read integer from Serial
-    mode = (OperationMode)choice;
+    char cmd = Serial.read();
 
-    switch (mode) {
-      case MODE_IDLE:
+    // Ignore newline / carriage return
+    if (cmd == '\n' || cmd == '\r') {
+      return;
+    }
+
+    switch (cmd) {
+      case '1':
+        mode = MODE_IDLE;
         Serial.println("System is in IDLE mode.");
-            // Show menu again for next input
-        Serial.println("\nEnter a number to choose a mode:");
-        Serial.println("1. IDLE");
-        Serial.println("2. SETUP");
-        Serial.println("3. BALANCE");
-        Serial.println("4. TEST");  
-        Serial.println("5. ERROR");
-        Serial.println("6. SHUTDOWN");
+        printMenu();
         break;
 
-      case MODE_SETUP:
+      case '2':
+        mode = MODE_SETUP;
         Serial.println("System is in SETUP.");
-        //
-        running = 1; 
-        while(running == 1){
+        Serial.println("Press 0 to return to menu.");
+        break;
 
-          needleValve_controller(); // Set voltages on the four needleValves 
+      case '3':
+        mode = MODE_BALANCE;
+        Serial.println("System is in BALANCE TEST.");
+        printMenu();
+        break;
 
-          read_raingauges();  //read status of rain gauges and increment counts
+      case '4':
+        mode = MODE_TEST;
+        Serial.println("System is in mm/hr TEST.");
+        printMenu();
+        break;
 
-          serial_debug();  //Output serial comms
+      case '5':
+        mode = MODE_ERROR;
+        Serial.println("System encountered an ERROR!");
+        printMenu();
+        break;
 
-          led_heartbeat();  //  Pulse D I/O ch0 as a heartbeat - Code running!
-
-          delay(10);  // small delay to reduce CPU usage
-
+      case '6':
+        mode = MODE_SHUTDOWN;
+        Serial.println("System is SHUTTING DOWN.");
+        while (true) {
+          delay(1000);
         }
         break;
 
-      case MODE_BALANCE:
-        Serial.println("System is in BALANCE TEST.");
-        // 
-        break;
-
-      case MODE_TEST:
-        Serial.println("System is in mm/hr TEST.");
-        // 
-        break;
-
-      case MODE_ERROR:
-        Serial.println("System encountered an ERROR!");
-        // You might trigger an alarm or safe state here
-        break;
-
-      case MODE_SHUTDOWN:
-        Serial.println("System is SHUTTING DOWN.");
-        // Could set outputs low, disable actuators, etc.
-        while (true) {
-          delay(1000); // stop here forever
+      case '0':
+        if (mode == MODE_SETUP) {
+          mode = MODE_IDLE;
+          Serial.println("Exiting SETUP.");
+          printMenu();
         }
         break;
 
       default:
-//        Serial.println("Invalid choice! Enter 1-4.");
+        Serial.println("Invalid choice!");
+        printMenu();
         break;
     }
-
   }
 
+  // Run active mode
+  switch (mode) {
+
+    case MODE_IDLE:
+        //Turn off solenoids
+        solenoid_controller(0, LOW);
+      break;
+
+    case MODE_SETUP:
+        // FILL TANK 0
+        // Check weight of load cell 0
+        // if not full open solennoid 0
+        solenoid_controller(0, HIGH);
+      break;
+
+    case MODE_BALANCE:
+      // balance code here
+      break;
+
+    case MODE_TEST:
+      // test code here
+      break;
+
+    case MODE_ERROR:
+    default:
+      break;
+  }
+
+  delay(10);
 }
 
 void solenoid_controller(uint8_t solenoid_no, PinStatus status){  //  Turns the solenoids On (HIGH) or Off (LOW)
