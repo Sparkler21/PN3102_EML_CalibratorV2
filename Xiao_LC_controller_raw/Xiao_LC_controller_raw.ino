@@ -28,8 +28,8 @@ int32_t offset = 0;
 float filteredCounts = 0.0f;
 const float alpha = 0.1f;
 
-// Replace after calibration
-float scaleKgPerCount = 0.00001f;
+// calibration
+float scaleKgPerCount = 0.00002471f;
 
 void csLow()  { digitalWrite(PIN_CS, LOW); }
 void csHigh() { digitalWrite(PIN_CS, HIGH); }
@@ -182,7 +182,7 @@ void loop() {
   Serial.print("  Filtered: ");
   Serial.print(filteredCounts, 1);
   Serial.print("  Weight kg: ");
-  Serial.println(weightKg, 4);
+  Serial.println(weightKg, 3);
 
   delay(100);
 }

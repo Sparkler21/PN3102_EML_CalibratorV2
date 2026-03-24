@@ -1,35 +1,19 @@
-#include <Arduino.h>
 #include <SPI.h>
-#include <Wire.h>
 
-// =========================
-// XIAO pin definitions
-// =========================
-static const uint8_t PIN_ADS_CS   = D7;
-static const uint8_t PIN_ADS_DRDY = D6;
-static const uint8_t PIN_ADS_RST  = D2;
+static const uint8_t PIN_CS      = D7;
+static const uint8_t PIN_DRDY    = D6;
+static const uint8_t PIN_PDWN    = D2;
+static const uint8_t PIN_MODESEL = D1;   // jumper to GND = calibration mode
 
-// XIAO hardware SPI:
-// MOSI = D10
-// MISO = D9
-// SCK  = D8
+SPISettings adsSpiSettings(1000000, MSBFIRST, SPI_MODE1);
 
-// I2C slave address seen by Portenta
-static const uint8_t I2C_ADDR = 0x2A;
-
-// =========================
 // ADS1256 commands
-// =========================
 static const uint8_t CMD_WAKEUP  = 0x00;
 static const uint8_t CMD_RDATA   = 0x01;
-static const uint8_t CMD_RDATAC  = 0x03;
 static const uint8_t CMD_SDATAC  = 0x0F;
-static const uint8_t CMD_RREG    = 0x10;
 static const uint8_t CMD_WREG    = 0x50;
 static const uint8_t CMD_SELFCAL = 0xF0;
 static const uint8_t CMD_SYNC    = 0xFC;
-static const uint8_t CMD_STANDBY = 0xFD;
-static const uint8_t CMD_RESET   = 0xFE;
 
 // ADS1256 registers
 static const uint8_t REG_STATUS = 0x00;
@@ -37,117 +21,79 @@ static const uint8_t REG_MUX    = 0x01;
 static const uint8_t REG_ADCON  = 0x02;
 static const uint8_t REG_DRATE  = 0x03;
 
-// Data rate settings
-static const uint8_t DRATE_100SPS = 0x82;
-static const uint8_t DRATE_30SPS  = 0x53;
-static const uint8_t DRATE_10SPS  = 0x23;
+// Settings
+static const uint8_t DRATE_30SPS = 0x53;
+static const uint8_t PGA_64      = 0x06;
 
-// PGA settings
-static const uint8_t PGA_1   = 0x00;
-static const uint8_t PGA_2   = 0x01;
-static const uint8_t PGA_4   = 0x02;
-static const uint8_t PGA_8   = 0x03;
-static const uint8_t PGA_16  = 0x04;
-static const uint8_t PGA_32  = 0x05;
-static const uint8_t PGA_64  = 0x06;
+enum RunMode {
+  MODE_OPERATION,
+  MODE_CALIBRATION
+};
 
-// SPI mode for ADS1256
-SPISettings adsSpiSettings(1000000, MSBFIRST, SPI_MODE1);
+RunMode runMode = MODE_OPERATION;
 
-// =========================
-// Channel data
-// =========================
 struct LoadCellChannel {
-  uint8_t ainP;
-  uint8_t ainN;
-  int32_t raw;
-  float filtered;
+  uint8_t pos;
+  uint8_t neg;
   int32_t offset;
-  float scaleKgPerCount;   // set by calibration
+  float filteredCounts;
+  float scaleKgPerCount;
+  int32_t counts;
   float weightKg;
 };
 
 LoadCellChannel lc[4] = {
-  {0, 1, 0, 0.0f, 0, 1.0f, 0.0f},
-  {2, 3, 0, 0.0f, 0, 1.0f, 0.0f},
-  {4, 5, 0, 0.0f, 0, 1.0f, 0.0f},
-  {6, 7, 0, 0.0f, 0, 1.0f, 0.0f}
+  {0, 1, 0, 0.0f, 0.00002471f, 0, 0.0f},
+  {2, 3, 0, 0.0f, 0.00002471f, 0, 0.0f},
+  {4, 5, 0, 0.0f, 0.00002471f, 0, 0.0f},
+  {6, 7, 0, 0.0f, 0.00002471f, 0, 0.0f}
 };
 
-static const float FILTER_ALPHA = 0.10f;
+const float alpha = 0.10f;
 
-// =========================
-// I2C packet
-// 4 floats = 16 bytes
-// 1 uint32_t sequence = 4 bytes
-// total = 20 bytes
-// =========================
-struct __attribute__((packed)) WeightPacket {
-  float weightKg[4];
-  uint32_t sequence;
-};
+void csLow()  { digitalWrite(PIN_CS, LOW); }
+void csHigh() { digitalWrite(PIN_CS, HIGH); }
 
-volatile bool tareRequested = false;
-volatile uint32_t packetSequence = 0;
-
-// =========================
-// Low-level ADS helpers
-// =========================
-void adsCsLow()  { digitalWrite(PIN_ADS_CS, LOW); }
-void adsCsHigh() { digitalWrite(PIN_ADS_CS, HIGH); }
-
-void adsWaitDRDY(uint32_t timeoutMs = 100) {
+bool adsWaitDRDY(uint32_t timeoutMs = 100) {
   uint32_t t0 = millis();
-  while (digitalRead(PIN_ADS_DRDY) == HIGH) {
-    if ((millis() - t0) > timeoutMs) {
-      break;
+  while (digitalRead(PIN_DRDY) == HIGH) {
+    if (millis() - t0 > timeoutMs) {
+      Serial.println("DRDY timeout");
+      return false;
     }
   }
+  return true;
 }
 
 void adsSendCommand(uint8_t cmd) {
   SPI.beginTransaction(adsSpiSettings);
-  adsCsLow();
+  csLow();
   SPI.transfer(cmd);
-  adsCsHigh();
+  csHigh();
   SPI.endTransaction();
 }
 
 void adsWriteRegister(uint8_t reg, uint8_t value) {
   SPI.beginTransaction(adsSpiSettings);
-  adsCsLow();
+  csLow();
   SPI.transfer(CMD_WREG | reg);
-  SPI.transfer(0x00);   // write one register
+  SPI.transfer(0x00);
   SPI.transfer(value);
-  adsCsHigh();
+  csHigh();
   SPI.endTransaction();
   delayMicroseconds(10);
 }
 
-uint8_t adsReadRegister(uint8_t reg) {
-  uint8_t value = 0;
-  SPI.beginTransaction(adsSpiSettings);
-  adsCsLow();
-  SPI.transfer(CMD_RREG | reg);
-  SPI.transfer(0x00);   // read one register
-  delayMicroseconds(10);
-  value = SPI.transfer(0xFF);
-  adsCsHigh();
-  SPI.endTransaction();
-  return value;
-}
-
-void adsSetDifferentialChannel(uint8_t pos, uint8_t neg) {
+void adsSetChannel(uint8_t pos, uint8_t neg) {
   uint8_t mux = (pos << 4) | (neg & 0x0F);
-
   adsWriteRegister(REG_MUX, mux);
 
   SPI.beginTransaction(adsSpiSettings);
-  adsCsLow();
+  csLow();
   SPI.transfer(CMD_SYNC);
   delayMicroseconds(4);
   SPI.transfer(CMD_WAKEUP);
-  adsCsHigh();
+  csHigh();
   SPI.endTransaction();
 
   delayMicroseconds(10);
@@ -155,12 +101,14 @@ void adsSetDifferentialChannel(uint8_t pos, uint8_t neg) {
 
 int32_t adsReadData() {
   uint8_t b0, b1, b2;
-  int32_t value;
+  int32_t value = 0;
 
-  adsWaitDRDY();
+  if (!adsWaitDRDY()) {
+    return 0;
+  }
 
   SPI.beginTransaction(adsSpiSettings);
-  adsCsLow();
+  csLow();
   SPI.transfer(CMD_RDATA);
   delayMicroseconds(10);
 
@@ -168,12 +116,11 @@ int32_t adsReadData() {
   b1 = SPI.transfer(0xFF);
   b2 = SPI.transfer(0xFF);
 
-  adsCsHigh();
+  csHigh();
   SPI.endTransaction();
 
   value = ((int32_t)b0 << 16) | ((int32_t)b1 << 8) | b2;
 
-  // Sign extend 24-bit to 32-bit
   if (value & 0x800000) {
     value |= 0xFF000000;
   }
@@ -181,165 +128,287 @@ int32_t adsReadData() {
   return value;
 }
 
-bool ads1256Begin() {
-  pinMode(PIN_ADS_CS, OUTPUT);
-  adsCsHigh();
+void adsInit() {
+  pinMode(PIN_CS, OUTPUT);
+  csHigh();
 
-  pinMode(PIN_ADS_DRDY, INPUT_PULLUP);
+  pinMode(PIN_DRDY, INPUT_PULLUP);
 
-  pinMode(PIN_ADS_RST, OUTPUT);
-  digitalWrite(PIN_ADS_RST, HIGH);
+  pinMode(PIN_PDWN, OUTPUT);
+  digitalWrite(PIN_PDWN, HIGH);
 
   SPI.begin();
 
-  // PDWN reset pulse
-  digitalWrite(PIN_ADS_RST, LOW);
+  digitalWrite(PIN_PDWN, LOW);
   delay(10);
-  digitalWrite(PIN_ADS_RST, HIGH);
+  digitalWrite(PIN_PDWN, HIGH);
   delay(10);
 
-  // Stop continuous mode
   adsSendCommand(CMD_SDATAC);
   delay(2);
 
   adsWaitDRDY();
 
-  // STATUS:
-  // bit2 ACAL=1
-  // input buffer off
   adsWriteRegister(REG_STATUS, 0x04);
-
-  // ADCON:
-  // clock out off, sensor detect off, PGA gain
   adsWriteRegister(REG_ADCON, PGA_64);
-
-  // Lower speed = lower noise
   adsWriteRegister(REG_DRATE, DRATE_30SPS);
 
   delay(2);
   adsSendCommand(CMD_SELFCAL);
-  delay(5);
-
-  return true;
+  delay(10);
 }
 
-// =========================
-// Load cell functions
-// =========================
-void readAllLoadCells() {
-  for (int i = 0; i < 4; i++) {
-    adsSetDifferentialChannel(lc[i].ainP, lc[i].ainN);
-    lc[i].raw = adsReadData();
-
-    if (lc[i].filtered == 0.0f) {
-      lc[i].filtered = (float)lc[i].raw;
-    } else {
-      lc[i].filtered =
-        (1.0f - FILTER_ALPHA) * lc[i].filtered +
-        FILTER_ALPHA * (float)lc[i].raw;
-    }
-
-    lc[i].weightKg = (lc[i].filtered - (float)lc[i].offset) * lc[i].scaleKgPerCount;
-  }
-
-  packetSequence++;
+int32_t readChannelRaw(uint8_t pos, uint8_t neg) {
+  adsSetChannel(pos, neg);
+  return adsReadData();
 }
 
-void tareAllLoadCells(uint16_t samples = 20) {
-  float sum[4] = {0, 0, 0, 0};
-
-  for (uint16_t s = 0; s < samples; s++) {
-    for (int i = 0; i < 4; i++) {
-      adsSetDifferentialChannel(lc[i].ainP, lc[i].ainN);
-      int32_t v = adsReadData();
-      sum[i] += (float)v;
-    }
+void tareOneChannel(uint8_t index, uint16_t samples = 30) {
+  int32_t sum = 0;
+  for (uint16_t i = 0; i < samples; i++) {
+    sum += readChannelRaw(lc[index].pos, lc[index].neg);
+    delay(20);
   }
+  lc[index].offset = sum / samples;
+  lc[index].filteredCounts = 0.0f;
+  lc[index].counts = 0;
+  lc[index].weightKg = 0.0f;
+}
 
-  for (int i = 0; i < 4; i++) {
-    lc[i].offset = (int32_t)(sum[i] / samples);
-    lc[i].filtered = (float)lc[i].offset;
-    lc[i].weightKg = 0.0f;
+void tareAllChannels(uint16_t samples = 30) {
+  Serial.println("Taring all channels...");
+  for (uint8_t i = 0; i < 4; i++) {
+    tareOneChannel(i, samples);
+    Serial.print("LC");
+    Serial.print(i + 1);
+    Serial.print(" offset = ");
+    Serial.println(lc[i].offset);
   }
 }
 
-void printDebug() {
-  Serial.print("LC1: "); Serial.print(lc[0].weightKg, 4); Serial.print(" kg, ");
-  Serial.print("LC2: "); Serial.print(lc[1].weightKg, 4); Serial.print(" kg, ");
-  Serial.print("LC3: "); Serial.print(lc[2].weightKg, 4); Serial.print(" kg, ");
-  Serial.print("LC4: "); Serial.print(lc[3].weightKg, 4); Serial.println(" kg");
-}
-
-// =========================
-// I2C callbacks
-// Master reads 20-byte packet
-// Master may write 1-byte commands:
-// 'T' = tare
-// =========================
-void onI2CRequest() {
-  WeightPacket pkt;
-  for (int i = 0; i < 4; i++) {
-    pkt.weightKg[i] = lc[i].weightKg;
-  }
-  pkt.sequence = packetSequence;
-
-  Wire.write((uint8_t *)&pkt, sizeof(pkt));
-}
-
-void onI2CReceive(int count) {
-  while (Wire.available()) {
-    char c = (char)Wire.read();
-    if (c == 'T') {
-      tareRequested = true;
-    }
+void updateAllChannels() {
+  for (uint8_t i = 0; i < 4; i++) {
+    int32_t raw = readChannelRaw(lc[i].pos, lc[i].neg);
+    lc[i].counts = raw - lc[i].offset;
+    lc[i].filteredCounts =
+      (1.0f - alpha) * lc[i].filteredCounts +
+      alpha * (float)lc[i].counts;
+    lc[i].weightKg = lc[i].filteredCounts * lc[i].scaleKgPerCount;
   }
 }
 
-// =========================
-// Setup / loop
-// =========================
-void setup() {
-  Serial.begin(115200);
+
+void printWeights() {
+  Serial.print("LC1: "); Serial.print(lc[0].weightKg, 3);
+  Serial.print("  LC2: "); Serial.print(lc[1].weightKg, 3);
+  Serial.print("  LC3: "); Serial.print(lc[2].weightKg, 3);
+  Serial.print("  LC4: "); Serial.println(lc[3].weightKg, 3);
+}
+
+void printCounts() {
+  for (uint8_t i = 0; i < 4; i++) {
+    Serial.print("LC");
+    Serial.print(i + 1);
+    Serial.print(" counts=");
+    Serial.print(lc[i].counts);
+    Serial.print(" filtered=");
+    Serial.print(lc[i].filteredCounts, 1);
+    Serial.print(" weight=");
+    Serial.print(lc[i].weightKg, 3);
+    Serial.print("   ");
+  }
+  Serial.println();
+}
+
+void printScaleFactors() {
+  Serial.println("Scale factors (kg/count):");
+  for (uint8_t i = 0; i < 4; i++) {
+    Serial.print("LC");
+    Serial.print(i + 1);
+    Serial.print(" = ");
+    Serial.println(lc[i].scaleKgPerCount, 8);
+  }
+}
+
+void calibrateChannel(uint8_t index, float knownKg) {
+  Serial.print("Calibrating LC");
+  Serial.print(index + 1);
+  Serial.print(" with known mass ");
+  Serial.print(knownKg, 3);
+  Serial.println(" kg");
+
   delay(1000);
 
-  Serial.println("XIAO ADS1256 coprocessor starting...");
+  // settle a bit
+  for (uint8_t i = 0; i < 20; i++) {
+    int32_t raw = readChannelRaw(lc[index].pos, lc[index].neg);
+    lc[index].counts = raw - lc[index].offset;
+    lc[index].filteredCounts =
+      (1.0f - alpha) * lc[index].filteredCounts +
+      alpha * (float)lc[index].counts;
+    delay(50);
+  }
 
-  ads1256Begin();
+  float counts = lc[index].filteredCounts;
 
-  // Placeholder scale factors.
-  // Replace after calibration for each load cell.
-  lc[0].scaleKgPerCount = 0.000001f;
-  lc[1].scaleKgPerCount = 0.000001f;
-  lc[2].scaleKgPerCount = 0.000001f;
-  lc[3].scaleKgPerCount = 0.000001f;
+  if (counts == 0.0f) {
+    Serial.println("Calibration failed: filtered counts = 0");
+    return;
+  }
 
-  Serial.println("Taring...");
-  tareAllLoadCells(30);
+  lc[index].scaleKgPerCount = knownKg / counts;
 
-  Wire.begin(I2C_ADDR);
-  Wire.onRequest(onI2CRequest);
-  Wire.onReceive(onI2CReceive);
+  Serial.print("LC");
+  Serial.print(index + 1);
+  Serial.print(" filtered counts = ");
+  Serial.println(counts, 1);
 
-  Serial.println("Ready.");
+  Serial.print("New scale factor = ");
+  Serial.println(lc[index].scaleKgPerCount, 8);
+}
+
+float readFloatFromSerial() {
+  String input = "";
+
+  // Clear any leftover line endings already in the buffer
+  while (Serial.available()) {
+    Serial.read();
+  }
+
+  // Wait for a full line from the user
+  while (true) {
+    if (Serial.available()) {
+      char c = Serial.read();
+
+      if (c == '\n' || c == '\r') {
+        if (input.length() > 0) {
+          break;
+        }
+      } else {
+        input += c;
+      }
+    }
+  }
+
+  return input.toFloat();
+}
+
+void printCalibrationMenu() {
+  Serial.println();
+  Serial.println("=== CALIBRATION MODE ===");
+  Serial.println("t  - tare all channels");
+  Serial.println("c  - show live counts");
+  Serial.println("w  - show live weights");
+  Serial.println("1  - calibrate LC1");
+  Serial.println("2  - calibrate LC2");
+  Serial.println("3  - calibrate LC3");
+  Serial.println("4  - calibrate LC4");
+  Serial.println("p  - print scale factors");
+  Serial.println("h  - show this menu");
+  Serial.println();
+}
+
+void handleCalibrationSerial() {
+  if (!Serial.available()) return;
+
+  char cmd = Serial.read();
+
+  switch (cmd) {
+    case 't':
+    case 'T':
+      tareAllChannels(30);
+      break;
+
+    case 'c':
+    case 'C':
+      Serial.println("Live counts for 10 seconds...");
+      for (uint16_t i = 0; i < 100; i++) {
+        updateAllChannels();
+        printCounts();
+        delay(100);
+      }
+      break;
+
+    case 'w':
+    case 'W':
+      Serial.println("Live weights for 10 seconds...");
+      for (uint16_t i = 0; i < 100; i++) {
+        updateAllChannels();
+        printWeights();
+        delay(100);
+      }
+      break;
+
+    case '1':
+    case '2':
+    case '3':
+    case '4': {
+      uint8_t idx = cmd - '1';
+
+      Serial.print("Enter known mass for LC");
+      Serial.print(idx + 1);
+      Serial.println(" in kg, then press Enter:");
+//      Serial.println("Example: 1.906");
+
+      float knownKg = readFloatFromSerial();
+
+      Serial.print("You entered: ");
+      Serial.println(knownKg, 3);
+
+      if (knownKg <= 0.0f) {
+        Serial.println("Invalid mass. Calibration cancelled.");
+      } else {
+        calibrateChannel(idx, knownKg);
+      }
+      break;
+    }
+
+    case 'p':
+    case 'P':
+      printScaleFactors();
+      break;
+
+    case 'h':
+    case 'H':
+      printCalibrationMenu();
+      break;
+
+    default:
+      break;
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(1500);
+
+  pinMode(PIN_MODESEL, INPUT_PULLUP);
+
+  adsInit();
+
+  for (uint8_t i = 0; i < 4; i++) {
+    readChannelRaw(lc[i].pos, lc[i].neg);
+    delay(50);
+  }
+
+  tareAllChannels(30);
+
+  if (digitalRead(PIN_MODESEL) == LOW) {
+    runMode = MODE_CALIBRATION;
+    Serial.println("Boot mode: CALIBRATION");
+    printCalibrationMenu();
+  } else {
+    runMode = MODE_OPERATION;
+    Serial.println("Boot mode: OPERATION");
+  }
 }
 
 void loop() {
-  if (tareRequested) {
-    noInterrupts();
-    tareRequested = false;
-    interrupts();
-
-    Serial.println("Tare requested via I2C");
-    tareAllLoadCells(30);
+  if (runMode == MODE_CALIBRATION) {
+    handleCalibrationSerial();
+  } else {
+    updateAllChannels();
+    printWeights();
+    delay(100);
   }
-
-  readAllLoadCells();
-
-  static uint32_t lastPrint = 0;
-  if (millis() - lastPrint > 500) {
-    lastPrint = millis();
-    printDebug();
-  }
-
-  delay(10);
 }
