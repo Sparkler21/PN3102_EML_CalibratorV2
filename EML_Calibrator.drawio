@@ -141,12 +141,6 @@
         <mxCell id="wdftHJP1e8FL4_DBny2Z-40" parent="1" style="shape=offPageConnector;whiteSpace=wrap;html=1;" value="SETUP" vertex="1">
           <mxGeometry height="80" width="80" x="570" y="600" as="geometry" />
         </mxCell>
-        <mxCell id="wdftHJP1e8FL4_DBny2Z-41" edge="1" parent="1" style="endArrow=classic;html=1;rounded=0;" value="">
-          <mxGeometry height="50" relative="1" width="50" as="geometry">
-            <mxPoint x="390" y="920" as="sourcePoint" />
-            <mxPoint x="440" y="870" as="targetPoint" />
-          </mxGeometry>
-        </mxCell>
         <mxCell id="wdftHJP1e8FL4_DBny2Z-42" edge="1" parent="1" source="wdftHJP1e8FL4_DBny2Z-21" style="endArrow=classic;html=1;rounded=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="wdftHJP1e8FL4_DBny2Z-40" value="">
           <mxGeometry height="50" relative="1" width="50" as="geometry">
             <Array as="points">
