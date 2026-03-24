@@ -1,4 +1,5 @@
 #include <Arduino_PortentaMachineControl.h>
+#include <Wire.h>
 
 //*****************************************************************************************************
 //DEFINES
@@ -11,11 +12,6 @@
 //#define SOLENOID_2 1
 //#define SOLENOID_3 2
 //#define SOLENOID_4 3
-
-//Load Cells
-#define ADS1256_CS_PIN     10
-#define ADS1256_DRDY_PIN    9
-#define ADS1256_RST_PIN     8   // optional, or tie high and ignore
 
 // Needle Valves (analog out) for control of water flow
 #define NEEDLE_VALVE_1 0
@@ -36,52 +32,13 @@ enum OperationMode {
   MODE_SHUTDOWN
 };
 
+static const uint8_t XIAO_ADDR = 0x2A;
+
 OperationMode mode = MODE_IDLE;
 
 //Load Cell Globals
 
 SPISettings adsSpiSettings(1000000, MSBFIRST, SPI_MODE1);
-
-// ADS1256 Commands
-static const uint8_t CMD_WAKEUP  = 0x00;
-static const uint8_t CMD_RDATA   = 0x01;
-static const uint8_t CMD_RDATAC  = 0x03;
-static const uint8_t CMD_SDATAC  = 0x0F;
-static const uint8_t CMD_RREG    = 0x10;
-static const uint8_t CMD_WREG    = 0x50;
-static const uint8_t CMD_SELFCAL = 0xF0;
-static const uint8_t CMD_SYNC    = 0xFC;
-static const uint8_t CMD_STANDBY = 0xFD;
-static const uint8_t CMD_RESET   = 0xFE;
-
-// ADS1256 Registers
-static const uint8_t REG_STATUS = 0x00;
-static const uint8_t REG_MUX    = 0x01;
-static const uint8_t REG_ADCON  = 0x02;
-static const uint8_t REG_DRATE  = 0x03;
-static const uint8_t REG_IO     = 0x04;
-static const uint8_t REG_OFC0   = 0x05;
-static const uint8_t REG_OFC1   = 0x06;
-static const uint8_t REG_OFC2   = 0x07;
-static const uint8_t REG_FSC0   = 0x08;
-static const uint8_t REG_FSC1   = 0x09;
-static const uint8_t REG_FSC2   = 0x0A;
-
-// Common DRATE values from ADS1256 datasheet
-static const uint8_t DRATE_1000SPS = 0xA1;
-static const uint8_t DRATE_100SPS  = 0x82;
-static const uint8_t DRATE_30SPS   = 0x53;
-static const uint8_t DRATE_10SPS   = 0x23;
-
-// ADS1256 PGA gain bits in ADCON
-static const uint8_t PGA_1   = 0x00;
-static const uint8_t PGA_2   = 0x01;
-static const uint8_t PGA_4   = 0x02;
-static const uint8_t PGA_8   = 0x03;
-static const uint8_t PGA_16  = 0x04;
-static const uint8_t PGA_32  = 0x05;
-static const uint8_t PGA_64  = 0x06;
-
 
 //  Voltage levels (0-10V) to control water flow / needlevalves
 float voltageNV1 = 0;
@@ -125,6 +82,13 @@ unsigned long lastSerialCheck = 0;
 unsigned long lastHeartbeat = 0;
 bool heartbeatState = false;
 
+struct __attribute__((packed)) WeightPacket {
+  float lc1;
+  float lc2;
+  float lc3;
+  float lc4;
+  uint32_t sequence;
+};
 
 //*****************************************************************************************************
 //HELPERS
@@ -136,208 +100,6 @@ bool heartbeatState = false;
 //****************************
 void solenoid_controller(uint8_t solenoid_no, PinStatus status){  //  Turns the solenoids On (HIGH) or Off (LOW)
   MachineControl_DigitalOutputs.write(solenoid_no, status);
-}
-
-//****************************
-//Load Cells / ADS1256
-// Low-level helpers
-//****************************
-void ads_cs_low()  { digitalWrite(ADS1256_CS_PIN, LOW); }
-void ads_cs_high() { digitalWrite(ADS1256_CS_PIN, HIGH); }
-
-void ads_sendCommand(uint8_t cmd) {
-  SPI.beginTransaction(adsSpiSettings);
-  ads_cs_low();
-  SPI.transfer(cmd);
-  ads_cs_high();
-  SPI.endTransaction();
-}
-
-void ads_waitDRDY(uint32_t timeout_ms = 100) {
-  uint32_t start = millis();
-  while (digitalRead(ADS1256_DRDY_PIN) == HIGH) {
-    if ((millis() - start) > timeout_ms) {
-      break;
-    }
-  }
-}
-
-void ads_writeRegister(uint8_t reg, uint8_t value) {
-  SPI.beginTransaction(adsSpiSettings);
-  ads_cs_low();
-  SPI.transfer(CMD_WREG | reg);
-  SPI.transfer(0x00);     // write one register
-  SPI.transfer(value);
-  ads_cs_high();
-  SPI.endTransaction();
-  delayMicroseconds(10);
-}
-
-uint8_t ads_readRegister(uint8_t reg) {
-  uint8_t value;
-  SPI.beginTransaction(adsSpiSettings);
-  ads_cs_low();
-  SPI.transfer(CMD_RREG | reg);
-  SPI.transfer(0x00);     // read one register
-  delayMicroseconds(10);
-  value = SPI.transfer(0xFF);
-  ads_cs_high();
-  SPI.endTransaction();
-  return value;
-}
-
-long ads_readData() {
-  uint8_t b0, b1, b2;
-  long value;
-
-  ads_waitDRDY();
-
-  SPI.beginTransaction(adsSpiSettings);
-  ads_cs_low();
-  SPI.transfer(CMD_RDATA);
-  delayMicroseconds(10);
-
-  b0 = SPI.transfer(0xFF);
-  b1 = SPI.transfer(0xFF);
-  b2 = SPI.transfer(0xFF);
-
-  ads_cs_high();
-  SPI.endTransaction();
-
-  value = ((long)b0 << 16) | ((long)b1 << 8) | b2;
-
-  // Sign-extend 24-bit to 32-bit
-  if (value & 0x800000) {
-    value |= 0xFF000000;
-  }
-
-  return value;
-}
-
-void ads_setDifferentialChannel(uint8_t pos, uint8_t neg) {
-  uint8_t mux = (pos << 4) | (neg & 0x0F);
-
-  ads_writeRegister(REG_MUX, mux);
-
-  // Sync and wakeup sequence after mux change
-  SPI.beginTransaction(adsSpiSettings);
-  ads_cs_low();
-  SPI.transfer(CMD_SYNC);
-  delayMicroseconds(4);
-  SPI.transfer(CMD_WAKEUP);
-  ads_cs_high();
-  SPI.endTransaction();
-
-  delayMicroseconds(10);
-}
-
-bool ads1256_begin() {
-  pinMode(ADS1256_CS_PIN, OUTPUT);
-  digitalWrite(ADS1256_CS_PIN, HIGH);
-
-  pinMode(ADS1256_DRDY_PIN, INPUT_PULLUP);
-
-  pinMode(ADS1256_RST_PIN, OUTPUT);
-  digitalWrite(ADS1256_RST_PIN, HIGH);
-
-  SPI.begin();
-
-  // Hardware reset
-  digitalWrite(ADS1256_RST_PIN, LOW);
-  delay(5);
-  digitalWrite(ADS1256_RST_PIN, HIGH);
-  delay(5);
-
-  // Stop continuous read mode just in case
-  ads_sendCommand(CMD_SDATAC);
-  delay(2);
-
-  ads_waitDRDY();
-
-  // STATUS: buffer off initially, auto-cal on
-  ads_writeRegister(REG_STATUS, 0x04);
-
-  // ADCON: clock out off, sensor detect off, PGA gain = 64
-  ads_writeRegister(REG_ADCON, PGA_64);
-
-  // Data rate: start with 30 SPS or 10 SPS for lower noise
-  ads_writeRegister(REG_DRATE, DRATE_30SPS);
-
-  delay(2);
-  ads_sendCommand(CMD_SELFCAL);
-  delay(5);
-
-  return true;
-}
-
-struct LoadCellChannel {
-  uint8_t ain_p;
-  uint8_t ain_n;
-  long raw;
-  float filtered;
-  long offset;
-  float scale;      // kg per count
-  float weightKg;
-};
-
-LoadCellChannel lc[4] = {
-  {0, 1, 0, 0.0f, 0, 1.0f, 0.0f},
-  {2, 3, 0, 0.0f, 0, 1.0f, 0.0f},
-  {4, 5, 0, 0.0f, 0, 1.0f, 0.0f},
-  {6, 7, 0, 0.0f, 0, 1.0f, 0.0f}
-};
-
-const float alpha = 0.1f;   // low-pass filter
-
-
-void read_all_loadcells() {
-  for (int i = 0; i < 4; i++) {
-    ads_setDifferentialChannel(lc[i].ain_p, lc[i].ain_n);
-    lc[i].raw = ads_readData();
-
-    if (lc[i].filtered == 0.0f) {
-      lc[i].filtered = (float)lc[i].raw;
-    } else {
-      lc[i].filtered = (1.0f - alpha) * lc[i].filtered + alpha * (float)lc[i].raw;
-    }
-
-    lc[i].weightKg = (lc[i].filtered - lc[i].offset) * lc[i].scale;
-  }
-}
-
-void tare_all_loadcells(uint16_t samples = 20) {
-  float sums[4] = {0, 0, 0, 0};
-
-  for (uint16_t s = 0; s < samples; s++) {
-    for (int i = 0; i < 4; i++) {
-      ads_setDifferentialChannel(lc[i].ain_p, lc[i].ain_n);
-      long v = ads_readData();
-      sums[i] += (float)v;
-    }
-  }
-
-  for (int i = 0; i < 4; i++) {
-    lc[i].offset = (long)(sums[i] / samples);
-    lc[i].filtered = (float)lc[i].offset;
-  }
-}
-
-void calibrate_one_loadcell(uint8_t i, float knownKg) {
-  // Call this after tare, with known mass on the selected cell
-  ads_setDifferentialChannel(lc[i].ain_p, lc[i].ain_n);
-  long raw = ads_readData();
-
-  long delta = raw - lc[i].offset;
-  if (delta != 0) {
-    lc[i].scale = knownKg / (float)delta;
-  }
-}
-
-void print_loadcells() {
-  Serial.print("LC1: "); Serial.print(lc[0].weightKg, 3); Serial.print(" kg, ");
-  Serial.print("LC2: "); Serial.print(lc[1].weightKg, 3); Serial.print(" kg, ");
-  Serial.print("LC3: "); Serial.print(lc[2].weightKg, 3); Serial.print(" kg, ");
-  Serial.print("LC4: "); Serial.print(lc[3].weightKg, 3); Serial.println(" kg");
 }
 
 //****************************
@@ -480,6 +242,43 @@ void led_heartbeat(void){
   }
 }
 
+void readI2C_LoadCells() {
+  WeightPacket pkt;
+
+  Wire.requestFrom(XIAO_ADDR, (uint8_t)sizeof(pkt));
+
+  uint8_t *p = (uint8_t *)&pkt;
+  uint8_t i = 0;
+
+  while (Wire.available() && i < sizeof(pkt)) {
+    p[i++] = Wire.read();
+  }
+
+  if (i == sizeof(pkt)) {
+    Serial.print("Seq: ");
+    Serial.print(pkt.sequence);
+
+    Serial.print("  LC1: ");
+    Serial.print(pkt.lc1, 3);
+
+    Serial.print("  LC2: ");
+    Serial.print(pkt.lc2, 3);
+
+    Serial.print("  LC3: ");
+    Serial.print(pkt.lc3, 3);
+
+    Serial.print("  LC4: ");
+    Serial.print(pkt.lc4, 3);
+
+    Serial.println();
+  } else {
+    Serial.print("I2C error, bytes read = ");
+    Serial.println(i);
+  }
+
+  delay(500);
+}
+
 //*****************************************************************************************************
 //SETUP
 //*****************************************************************************************************
@@ -488,6 +287,8 @@ void setup() {
   Serial.begin(115200);
   delay(1000);   // allow USB to settle
   serialActive = Serial;  //Serial comms watchdog to prevent lock up
+
+  Wire.begin();
 
   if (serialActive) {
     Serial.println("*********EML Calibrator*********");
@@ -624,6 +425,8 @@ void loop() {
         // FILL TANK 0
         // Check weight of load cell 0
         // if not full open solennoid 0
+        readI2C_LoadCells();
+        
         solenoid_controller(0, HIGH);
       break;
 

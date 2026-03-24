@@ -1,9 +1,18 @@
+//Mark Dutton 
+// 24th March 2026
 #include <SPI.h>
+#include <Wire.h>
+#include <FlashStorage_SAMD.h>
+
+void onI2CReceive(int numBytes);
+void onI2CRequest();
 
 static const uint8_t PIN_CS      = D7;
 static const uint8_t PIN_DRDY    = D6;
 static const uint8_t PIN_PDWN    = D2;
 static const uint8_t PIN_MODESEL = D1;   // jumper to GND = calibration mode
+
+static const uint8_t I2C_ADDR = 0x2A;
 
 SPISettings adsSpiSettings(1000000, MSBFIRST, SPI_MODE1);
 
@@ -32,6 +41,28 @@ enum RunMode {
 
 RunMode runMode = MODE_OPERATION;
 
+struct CalibrationData {
+  uint32_t magic;
+  uint32_t version;
+  int32_t offsets[4];
+  float scales[4];
+};
+
+FlashStorage(calStore, CalibrationData);
+
+static const uint32_t CAL_MAGIC   = 0x4C43414C;   // "LCAL"
+static const uint32_t CAL_VERSION = 1;
+
+struct __attribute__((packed)) WeightPacket {
+  float lc1;
+  float lc2;
+  float lc3;
+  float lc4;
+  uint32_t sequence;
+};
+
+static_assert(sizeof(WeightPacket) == 20, "Packet size incorrect");
+
 struct LoadCellChannel {
   uint8_t pos;
   uint8_t neg;
@@ -50,6 +81,7 @@ LoadCellChannel lc[4] = {
 };
 
 const float alpha = 0.10f;
+volatile uint32_t packetSequence = 0;
 
 void csLow()  { digitalWrite(PIN_CS, LOW); }
 void csHigh() { digitalWrite(PIN_CS, HIGH); }
@@ -164,12 +196,12 @@ int32_t readChannelRaw(uint8_t pos, uint8_t neg) {
 }
 
 void tareOneChannel(uint8_t index, uint16_t samples = 30) {
-  int32_t sum = 0;
+  int64_t sum = 0;
   for (uint16_t i = 0; i < samples; i++) {
     sum += readChannelRaw(lc[index].pos, lc[index].neg);
     delay(20);
   }
-  lc[index].offset = sum / samples;
+  lc[index].offset = (int32_t)(sum / samples);
   lc[index].filteredCounts = 0.0f;
   lc[index].counts = 0;
   lc[index].weightKg = 0.0f;
@@ -184,6 +216,9 @@ void tareAllChannels(uint16_t samples = 30) {
     Serial.print(" offset = ");
     Serial.println(lc[i].offset);
   }
+
+  saveCalibrationToFlash();
+  Serial.println("Offsets saved to flash.");
 }
 
 void updateAllChannels() {
@@ -195,8 +230,26 @@ void updateAllChannels() {
       alpha * (float)lc[i].counts;
     lc[i].weightKg = lc[i].filteredCounts * lc[i].scaleKgPerCount;
   }
+
+  packetSequence++;
 }
 
+void onI2CRequest() {
+  WeightPacket pkt;
+  pkt.lc1 = lc[0].weightKg;
+  pkt.lc2 = lc[1].weightKg;
+  pkt.lc3 = lc[2].weightKg;
+  pkt.lc4 = lc[3].weightKg;
+  pkt.sequence = packetSequence;
+
+  Wire.write((uint8_t *)&pkt, sizeof(pkt));
+}
+
+void onI2CReceive(int numBytes) {
+  while (Wire.available()) {
+    Wire.read(); // discard incoming data
+  }
+}
 
 void printWeights() {
   Serial.print("LC1: "); Serial.print(lc[0].weightKg, 3);
@@ -213,8 +266,6 @@ void printCounts() {
     Serial.print(lc[i].counts);
     Serial.print(" filtered=");
     Serial.print(lc[i].filteredCounts, 1);
-    Serial.print(" weight=");
-    Serial.print(lc[i].weightKg, 3);
     Serial.print("   ");
   }
   Serial.println();
@@ -239,7 +290,6 @@ void calibrateChannel(uint8_t index, float knownKg) {
 
   delay(1000);
 
-  // settle a bit
   for (uint8_t i = 0; i < 20; i++) {
     int32_t raw = readChannelRaw(lc[index].pos, lc[index].neg);
     lc[index].counts = raw - lc[index].offset;
@@ -265,116 +315,178 @@ void calibrateChannel(uint8_t index, float knownKg) {
 
   Serial.print("New scale factor = ");
   Serial.println(lc[index].scaleKgPerCount, 8);
+
+  saveCalibrationToFlash();
+  Serial.println("Calibration saved to flash.");
 }
 
 float readFloatFromSerial() {
   String input = "";
 
-  // Clear any leftover line endings already in the buffer
-  while (Serial.available()) {
-    Serial.read();
-  }
-
-  // Wait for a full line from the user
   while (true) {
-    if (Serial.available()) {
+    while (Serial.available()) {
       char c = Serial.read();
 
       if (c == '\n' || c == '\r') {
         if (input.length() > 0) {
-          break;
+          return input.toFloat();
         }
       } else {
         input += c;
       }
     }
   }
-
-  return input.toFloat();
 }
 
 void printCalibrationMenu() {
   Serial.println();
   Serial.println("=== CALIBRATION MODE ===");
-  Serial.println("t  - tare all channels");
-  Serial.println("c  - show live counts");
-  Serial.println("w  - show live weights");
-  Serial.println("1  - calibrate LC1");
-  Serial.println("2  - calibrate LC2");
-  Serial.println("3  - calibrate LC3");
-  Serial.println("4  - calibrate LC4");
-  Serial.println("p  - print scale factors");
-  Serial.println("h  - show this menu");
+  Serial.println("t        - tare all channels");
+  Serial.println("w        - show live weights");
+  Serial.println("c        - show live counts");
+  Serial.println("p        - print scale factors");
+  Serial.println("1,kg     - calibrate LC1  e.g. 1,1.906");
+  Serial.println("2,kg     - calibrate LC2  e.g. 2,1.906");
+  Serial.println("3,kg     - calibrate LC3  e.g. 3,1.906");
+  Serial.println("4,kg     - calibrate LC4  e.g. 4,1.906");
+  Serial.println("s        - save calibration to flash");
+  Serial.println("l        - load calibration from flash");
+  Serial.println("d        - print stored calibration");
+  Serial.println("h        - show this menu");
   Serial.println();
 }
 
 void handleCalibrationSerial() {
   if (!Serial.available()) return;
 
-  char cmd = Serial.read();
+  String line = Serial.readStringUntil('\n');
+  line.trim();
 
-  switch (cmd) {
-    case 't':
-    case 'T':
-      tareAllChannels(30);
-      break;
+  if (line.length() == 0) return;
 
-    case 'c':
-    case 'C':
-      Serial.println("Live counts for 10 seconds...");
-      for (uint16_t i = 0; i < 100; i++) {
-        updateAllChannels();
-        printCounts();
-        delay(100);
-      }
-      break;
+  if (line.equalsIgnoreCase("t")) {
+    tareAllChannels(30);
+    return;
+  }
 
-    case 'w':
-    case 'W':
-      Serial.println("Live weights for 10 seconds...");
-      for (uint16_t i = 0; i < 100; i++) {
-        updateAllChannels();
-        printWeights();
-        delay(100);
-      }
-      break;
-
-    case '1':
-    case '2':
-    case '3':
-    case '4': {
-      uint8_t idx = cmd - '1';
-
-      Serial.print("Enter known mass for LC");
-      Serial.print(idx + 1);
-      Serial.println(" in kg, then press Enter:");
-//      Serial.println("Example: 1.906");
-
-      float knownKg = readFloatFromSerial();
-
-      Serial.print("You entered: ");
-      Serial.println(knownKg, 3);
-
-      if (knownKg <= 0.0f) {
-        Serial.println("Invalid mass. Calibration cancelled.");
-      } else {
-        calibrateChannel(idx, knownKg);
-      }
-      break;
+  if (line.equalsIgnoreCase("w")) {
+    Serial.println("Live weights for 10 seconds...");
+    for (uint16_t i = 0; i < 100; i++) {
+      updateAllChannels();
+      printWeights();
+      delay(100);
     }
+    return;
+  }
 
-    case 'p':
-    case 'P':
-      printScaleFactors();
-      break;
+  if (line.equalsIgnoreCase("c")) {
+    Serial.println("Live counts for 10 seconds...");
+    for (uint16_t i = 0; i < 100; i++) {
+      updateAllChannels();
+      printCounts();
+      delay(100);
+    }
+    return;
+  }
 
-    case 'h':
-    case 'H':
-      printCalibrationMenu();
-      break;
+  if (line.equalsIgnoreCase("p")) {
+    printScaleFactors();
+    return;
+  }
 
-    default:
-      break;
+  if (line.equalsIgnoreCase("s")) {
+    saveCalibrationToFlash();
+    Serial.println("Calibration saved to flash.");
+    return;
+  }
+
+  if (line.equalsIgnoreCase("l")) {
+    if (loadCalibrationFromFlash()) {
+      Serial.println("Calibration loaded from flash.");
+      printCalibrationData();
+    } else {
+      Serial.println("No valid calibration found in flash.");
+    }
+    return;
+  }
+
+  if (line.equalsIgnoreCase("d")) {
+    printCalibrationData();
+    return;
+  }
+
+  if (line.equalsIgnoreCase("h")) {
+    printCalibrationMenu();
+    return;
+  }
+
+  // Calibration command format: channel,mass
+  int commaPos = line.indexOf(',');
+  if (commaPos > 0) {
+    String chStr = line.substring(0, commaPos);
+    String massStr = line.substring(commaPos + 1);
+
+    chStr.trim();
+    massStr.trim();
+
+    int channel = chStr.toInt();      // 1..4
+    float knownKg = massStr.toFloat();
+
+    if (channel >= 1 && channel <= 4 && knownKg > 0.0f) {
+      Serial.print("Calibrating LC");
+      Serial.print(channel);
+      Serial.print(" with known mass ");
+      Serial.print(knownKg, 3);
+      Serial.println(" kg");
+
+      calibrateChannel(channel - 1, knownKg);
+      return;
+    }
+  }
+
+  Serial.println("Unknown command. Type h for help.");
+}
+
+
+bool loadCalibrationFromFlash() {
+  CalibrationData data;
+  calStore.read(data);
+
+  if (data.magic != CAL_MAGIC || data.version != CAL_VERSION) {
+    return false;
+  }
+
+  for (uint8_t i = 0; i < 4; i++) {
+    lc[i].offset = data.offsets[i];
+    lc[i].scaleKgPerCount = data.scales[i];
+  }
+
+  return true;
+}
+
+void saveCalibrationToFlash() {
+  CalibrationData data;
+
+  data.magic = CAL_MAGIC;
+  data.version = CAL_VERSION;
+
+  for (uint8_t i = 0; i < 4; i++) {
+    data.offsets[i] = lc[i].offset;
+    data.scales[i] = lc[i].scaleKgPerCount;
+  }
+
+  calStore.write(data);
+}
+
+void printCalibrationData() {
+  Serial.println("Stored calibration:");
+  for (uint8_t i = 0; i < 4; i++) {
+    Serial.print("LC");
+    Serial.print(i + 1);
+    Serial.print(" offset=");
+    Serial.print(lc[i].offset);
+    Serial.print(" scale=");
+    Serial.println(lc[i].scaleKgPerCount, 8);
   }
 }
 
@@ -382,24 +494,53 @@ void setup() {
   Serial.begin(115200);
   delay(1500);
 
+  Wire.begin(I2C_ADDR);
+  Wire.onRequest(onI2CRequest);
+  Wire.onReceive(onI2CReceive);
+
   pinMode(PIN_MODESEL, INPUT_PULLUP);
+
+  bool calLoaded = loadCalibrationFromFlash();
+
+  if (calLoaded) {
+    Serial.println("Calibration loaded from flash.");
+  } else {
+    Serial.println("No valid calibration in flash. Using defaults.");
+    // keep your hard-coded defaults here
+    lc[0].scaleKgPerCount = 0.00002471f;
+    lc[1].scaleKgPerCount = 0.00002471f;
+    lc[2].scaleKgPerCount = 0.00002471f;
+    lc[3].scaleKgPerCount = 0.00002471f;
+  }
+
+  printCalibrationData();
 
   adsInit();
 
   for (uint8_t i = 0; i < 4; i++) {
-    readChannelRaw(lc[i].pos, lc[i].neg);
-    delay(50);
+    int32_t raw = readChannelRaw(lc[i].pos, lc[i].neg);
+    lc[i].counts = raw - lc[i].offset;
+    lc[i].filteredCounts = (float)lc[i].counts;
+    lc[i].weightKg = lc[i].filteredCounts * lc[i].scaleKgPerCount;
   }
-
-  tareAllChannels(30);
 
   if (digitalRead(PIN_MODESEL) == LOW) {
     runMode = MODE_CALIBRATION;
     Serial.println("Boot mode: CALIBRATION");
+    tareAllChannels(30);   // only tare automatically in calibration mode
     printCalibrationMenu();
-  } else {
+  } 
+  else {
     runMode = MODE_OPERATION;
     Serial.println("Boot mode: OPERATION");
+
+    // Initialise filter from current readings so startup is smooth
+    for (uint8_t i = 0; i < 4; i++) {
+      int32_t raw = readChannelRaw(lc[i].pos, lc[i].neg);
+      lc[i].counts = raw - lc[i].offset;
+      lc[i].filteredCounts = (float)lc[i].counts;
+      lc[i].weightKg = lc[i].filteredCounts * lc[i].scaleKgPerCount;
+    }
   }
 }
 
