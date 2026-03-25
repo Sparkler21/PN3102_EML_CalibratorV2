@@ -1,0 +1,16 @@
+C:\Users\MarkDutton\Git\PN3102_EML_CalibratorV2\EML_Calibrator_GUI\EML_Calibrator_GUI\obj\Debug\net7.0-windows\EML_Calibrator_GUI.csproj.GenerateResource.cache
+C:\Users\MarkDutton\Git\PN3102_EML_CalibratorV2\EML_Calibrator_GUI\EML_Calibrator_GUI\obj\Debug\net7.0-windows\EML_Calibrator_GUI.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\MarkDutton\Git\PN3102_EML_CalibratorV2\EML_Calibrator_GUI\EML_Calibrator_GUI\obj\Debug\net7.0-windows\EML_Calibrator_GUI.AssemblyInfoInputs.cache
+C:\Users\MarkDutton\Git\PN3102_EML_CalibratorV2\EML_Calibrator_GUI\EML_Calibrator_GUI\obj\Debug\net7.0-windows\EML_Calibrator_GUI.AssemblyInfo.cs
+C:\Users\MarkDutton\Git\PN3102_EML_CalibratorV2\EML_Calibrator_GUI\EML_Calibrator_GUI\obj\Debug\net7.0-windows\EML_Calibrator_GUI.csproj.CoreCompileInputs.cache
+C:\Users\MarkDutton\Git\PN3102_EML_CalibratorV2\EML_Calibrator_GUI\EML_Calibrator_GUI\obj\Debug\net7.0-windows\EML_Calibrator_GUI.Form1.resources
+C:\Users\MarkDutton\Git\PN3102_EML_CalibratorV2\EML_Calibrator_GUI\EML_Calibrator_GUI\bin\Debug\net7.0-windows\EML_Calibrator_GUI.exe
+C:\Users\MarkDutton\Git\PN3102_EML_CalibratorV2\EML_Calibrator_GUI\EML_Calibrator_GUI\bin\Debug\net7.0-windows\EML_Calibrator_GUI.deps.json
+C:\Users\MarkDutton\Git\PN3102_EML_CalibratorV2\EML_Calibrator_GUI\EML_Calibrator_GUI\bin\Debug\net7.0-windows\EML_Calibrator_GUI.runtimeconfig.json
+C:\Users\MarkDutton\Git\PN3102_EML_CalibratorV2\EML_Calibrator_GUI\EML_Calibrator_GUI\bin\Debug\net7.0-windows\EML_Calibrator_GUI.dll
+C:\Users\MarkDutton\Git\PN3102_EML_CalibratorV2\EML_Calibrator_GUI\EML_Calibrator_GUI\bin\Debug\net7.0-windows\EML_Calibrator_GUI.pdb
+C:\Users\MarkDutton\Git\PN3102_EML_CalibratorV2\EML_Calibrator_GUI\EML_Calibrator_GUI\obj\Debug\net7.0-windows\EML_Calibrator_GUI.dll
+C:\Users\MarkDutton\Git\PN3102_EML_CalibratorV2\EML_Calibrator_GUI\EML_Calibrator_GUI\obj\Debug\net7.0-windows\refint\EML_Calibrator_GUI.dll
+C:\Users\MarkDutton\Git\PN3102_EML_CalibratorV2\EML_Calibrator_GUI\EML_Calibrator_GUI\obj\Debug\net7.0-windows\EML_Calibrator_GUI.pdb
+C:\Users\MarkDutton\Git\PN3102_EML_CalibratorV2\EML_Calibrator_GUI\EML_Calibrator_GUI\obj\Debug\net7.0-windows\EML_Calibrator_GUI.genruntimeconfig.cache
+C:\Users\MarkDutton\Git\PN3102_EML_CalibratorV2\EML_Calibrator_GUI\EML_Calibrator_GUI\obj\Debug\net7.0-windows\ref\EML_Calibrator_GUI.dll

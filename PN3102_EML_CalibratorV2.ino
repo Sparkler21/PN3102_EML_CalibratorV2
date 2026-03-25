@@ -1,4 +1,6 @@
 #include <Arduino_PortentaMachineControl.h>
+#include <PortentaEthernet.h>
+#include <Ethernet.h>
 #include <Wire.h>
 
 //*****************************************************************************************************
@@ -7,11 +9,25 @@
 #define PERIOD_MS 4        // 4 ms = 250 Hz
 
 //*****************************************************************************************************
+// Ethernet config
+//*****************************************************************************************************
+byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
+
+// Pick an address that fits your LAN
+IPAddress ip(172, 16, 168, 99);
+IPAddress dns(172, 16, 168, 252);
+IPAddress gateway(172, 16, 168, 254);
+IPAddress subnet(255, 255, 255, 0);
+
+EthernetServer server(5000);
+EthernetClient client;
+
+//*****************************************************************************************************
 //GLOBALS
 //*****************************************************************************************************
 
 //*****************************************************************************************************
-//Core Enums
+//Core Enums and Structs
 //*****************************************************************************************************
 // Define operation modes
 enum OperationMode {
@@ -24,9 +40,77 @@ enum OperationMode {
 };
 OperationMode mode = MODE_IDLE;
 
+enum RigMode {
+  RIG_IDLE = 0,
+  RIG_FILL,
+  RIG_SETTLE,
+  RIG_STABILIZE,
+  RIG_RUN,
+  RIG_FINISH,
+  RIG_COMPLETE,
+  RIG_ERROR
+};
+
+struct RigState {
+  RigMode mode;
+  uint32_t stateEntryMs;
+  uint32_t stableSinceMs;
+  int fault;
+  bool enabled;
+  bool startRequest;
+  bool stopRequest;
+};
+
+struct RigData {
+  float massKg;
+  float filteredMassKg;
+  float lastMassKg;
+  float flowLpm;
+  float valveCommandV;
+  bool fillSolenoidOn;
+  bool sensorOk;
+};
+
+struct RigRecipe {
+  float startMassKg;
+  float targetFlowLpm;
+  float settleBandKg;
+  float flowBandLpm;
+  uint32_t fillTimeoutMs;
+  uint32_t settleTimeoutMs;
+  uint32_t stabilizeTimeoutMs;
+  uint32_t runDurationMs;
+};
+
+RigState rigState[4];
+RigData rigData[4];
+RigRecipe rigRecipe[4];
+
+enum CommandType {
+  CMD_UNKNOWN = 0,
+  CMD_PING,
+  CMD_GET_STATUS,
+  CMD_GET_WEIGHTS,
+  CMD_GET_WEIGHT,
+  CMD_SET_VALVE,
+  CMD_GET_VALVE,
+  CMD_FILL_TANK,
+  CMD_STOP_TANK,
+  CMD_STOP_ALL
+};
+
+struct ParsedCommand {
+  CommandType type = CMD_UNKNOWN;
+  int channel = -1;       // 1..4 from protocol
+  float value = 0.0f;     // e.g. valve voltage
+  bool valid = false;
+  String error = "";
+};
+
 //Load Cell Globals
 static const uint8_t XIAO_ADDR = 0x2A;
 float lcWeight[4] = {0};
+uint32_t lastSeq = 0;
 
 struct __attribute__((packed)) WeightPacket {
   float lc1;
@@ -38,6 +122,7 @@ struct __attribute__((packed)) WeightPacket {
 
 //  Voltage levels (0-10V) to control water flow / needlevalves
 float voltageNV[4] = {0};
+float valveSetpoint[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 
 // Raingauge channel counts
 unsigned long pulseCountRGA[4] = {0};   // total pulses counted on RG chA
@@ -75,6 +160,386 @@ void printMenu() {
 }
 
 //***********************************************************
+// Parsing Helper Functions
+//***********************************************************
+bool isIntegerString(const String &s) {
+  if (s.length() == 0) return false;
+
+  for (unsigned int i = 0; i < s.length(); i++) {
+    if (!isDigit(s[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool isFloatString(const String &s) {
+  if (s.length() == 0) return false;
+
+  bool decimalFound = false;
+
+  for (unsigned int i = 0; i < s.length(); i++) {
+    char c = s[i];
+
+    if (c == '.') {
+      if (decimalFound) return false;
+      decimalFound = true;
+    }
+    else if (!isDigit(c)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool isValidChannel(int channel) {
+  return (channel >= 1 && channel <= 4);
+}
+
+// Split by comma into up to maxParts entries.
+// Returns actual number of parts found.
+int splitCsv(const String &input, String parts[], int maxParts) {
+  int count = 0;
+  int start = 0;
+
+  while (count < maxParts) {
+    int comma = input.indexOf(',', start);
+
+    if (comma == -1) {
+      parts[count] = input.substring(start);
+      parts[count].trim();
+      count++;
+      break;
+    }
+
+    parts[count] = input.substring(start, comma);
+    parts[count].trim();
+    count++;
+
+    start = comma + 1;
+  }
+
+  return count;
+}
+
+//***********************************************************
+// Parsing Functions
+//***********************************************************
+ParsedCommand parseCommand(const String &rawCmd) {
+  ParsedCommand pc;
+  String cmd = rawCmd;
+  cmd.trim();
+
+  if (cmd.length() == 0) {
+    pc.error = "EMPTY_COMMAND";
+    return pc;
+  }
+
+  // Single-word commands
+  if (cmd.equalsIgnoreCase("PING")) {
+    pc.type = CMD_PING;
+    pc.valid = true;
+    return pc;
+  }
+
+  if (cmd.equalsIgnoreCase("GET_STATUS")) {
+    pc.type = CMD_GET_STATUS;
+    pc.valid = true;
+    return pc;
+  }
+
+  if (cmd.equalsIgnoreCase("GET_WEIGHTS")) {
+    pc.type = CMD_GET_WEIGHTS;
+    pc.valid = true;
+    return pc;
+  }
+
+  if (cmd.equalsIgnoreCase("STOP_ALL")) {
+    pc.type = CMD_STOP_ALL;
+    pc.valid = true;
+    return pc;
+  }
+
+  // CSV commands
+  String parts[3];
+  int partCount = splitCsv(cmd, parts, 3);
+
+  if (partCount <= 0) {
+    pc.error = "BAD_FORMAT";
+    return pc;
+  }
+
+  // GET_WEIGHT,<channel>
+  if (parts[0].equalsIgnoreCase("GET_WEIGHT")) {
+    if (partCount != 2) {
+      pc.error = "BAD_FORMAT";
+      return pc;
+    }
+
+    if (!isIntegerString(parts[1])) {
+      pc.error = "BAD_CHANNEL";
+      return pc;
+    }
+
+    pc.channel = parts[1].toInt();
+    if (!isValidChannel(pc.channel)) {
+      pc.error = "BAD_CHANNEL";
+      return pc;
+    }
+
+    pc.type = CMD_GET_WEIGHT;
+    pc.valid = true;
+    return pc;
+  }
+
+  // GET_VALVE,<channel>
+  if (parts[0].equalsIgnoreCase("GET_VALVE")) {
+    if (partCount != 2) {
+      pc.error = "BAD_FORMAT";
+      return pc;
+    }
+
+    if (!isIntegerString(parts[1])) {
+      pc.error = "BAD_CHANNEL";
+      return pc;
+    }
+
+    pc.channel = parts[1].toInt();
+    if (!isValidChannel(pc.channel)) {
+      pc.error = "BAD_CHANNEL";
+      return pc;
+    }
+
+    pc.type = CMD_GET_VALVE;
+    pc.valid = true;
+    return pc;
+  }
+
+  // FILL_TANK,<channel>
+  if (parts[0].equalsIgnoreCase("FILL_TANK")) {
+    if (partCount != 2) {
+      pc.error = "BAD_FORMAT";
+      return pc;
+    }
+
+    if (!isIntegerString(parts[1])) {
+      pc.error = "BAD_CHANNEL";
+      return pc;
+    }
+
+    pc.channel = parts[1].toInt();
+    if (!isValidChannel(pc.channel)) {
+      pc.error = "BAD_CHANNEL";
+      return pc;
+    }
+
+    pc.type = CMD_FILL_TANK;
+    pc.valid = true;
+    return pc;
+  }
+
+  // STOP_TANK,<channel>
+  if (parts[0].equalsIgnoreCase("STOP_TANK")) {
+    if (partCount != 2) {
+      pc.error = "BAD_FORMAT";
+      return pc;
+    }
+
+    if (!isIntegerString(parts[1])) {
+      pc.error = "BAD_CHANNEL";
+      return pc;
+    }
+
+    pc.channel = parts[1].toInt();
+    if (!isValidChannel(pc.channel)) {
+      pc.error = "BAD_CHANNEL";
+      return pc;
+    }
+
+    pc.type = CMD_STOP_TANK;
+    pc.valid = true;
+    return pc;
+  }
+
+  // SET_VALVE,<channel>,<value>
+  if (parts[0].equalsIgnoreCase("SET_VALVE")) {
+    if (partCount != 3) {
+      pc.error = "BAD_FORMAT";
+      return pc;
+    }
+
+    if (!isIntegerString(parts[1])) {
+      pc.error = "BAD_CHANNEL";
+      return pc;
+    }
+
+    if (!isFloatString(parts[2])) {
+      pc.error = "BAD_VALUE";
+      return pc;
+    }
+
+    pc.channel = parts[1].toInt();
+    if (!isValidChannel(pc.channel)) {
+      pc.error = "BAD_CHANNEL";
+      return pc;
+    }
+
+    pc.value = parts[2].toFloat();
+    if (pc.value < 0.0f || pc.value > 10.0f) {
+      pc.error = "BAD_VALUE";
+      return pc;
+    }
+
+    pc.type = CMD_SET_VALVE;
+    pc.valid = true;
+    return pc;
+  }
+
+  pc.error = "UNKNOWN_COMMAND";
+  return pc;
+}
+
+//***********************************************************
+// Execute Command Function
+//***********************************************************
+String executeCommand(const ParsedCommand &pc) {
+  if (!pc.valid) {
+    return "ERROR," + pc.error;
+  }
+
+  switch (pc.type) {
+    case CMD_PING:
+      return "PONG";
+
+    case CMD_GET_STATUS:
+      return "STATUS,RUN,0,1,IDLE,IDLE,IDLE,IDLE";
+
+    case CMD_GET_WEIGHTS: {
+      String s = "WEIGHTS,";
+      s += String(lcWeight[0], 3) + ",";
+      s += String(lcWeight[1], 3) + ",";
+      s += String(lcWeight[2], 3) + ",";
+      s += String(lcWeight[3], 3) + ",";
+      s += String(lastSeq);
+      return s;
+    }
+
+    case CMD_GET_WEIGHT: {
+      int idx = pc.channel - 1;
+      return "WEIGHT," + String(pc.channel) + "," + String(lcWeight[idx], 3);
+    }
+
+    case CMD_SET_VALVE: {
+      int idx = pc.channel - 1;
+      needleValve_controller(idx, pc.value);
+      return "OK,SET_VALVE," + String(pc.channel) + "," + String(pc.value, 3);
+    }
+
+    case CMD_GET_VALVE: {
+      int idx = pc.channel - 1;
+      // Replace valveSetpoint[] with your real stored valve command array
+      return "VALVE," + String(pc.channel) + "," + String(valveSetpoint[idx], 3);
+    }
+
+    case CMD_FILL_TANK: {
+      int idx = pc.channel - 1;
+      solenoid_controller(idx, HIGH);
+      return "OK,FILL_TANK," + String(pc.channel);
+    }
+
+    case CMD_STOP_TANK: {
+      int idx = pc.channel - 1;
+      solenoid_controller(idx, LOW);
+      return "OK,STOP_TANK," + String(pc.channel);
+    }
+
+    case CMD_STOP_ALL: {
+      for (int i = 0; i < 4; i++) {
+        solenoid_controller(i, LOW);
+        needleValve_controller(i, 0.0f);
+      }
+      return "OK,STOP_ALL";
+    }
+
+    default:
+      return "ERROR,UNKNOWN_COMMAND";
+  }
+}
+
+//***********************************************************
+// Ethernet Active
+//***********************************************************
+void ethernetClientActive(void){
+  // Accept a client if none connected
+  if (!client || !client.connected()) {
+    EthernetClient newClient = server.available();
+    if (newClient) {
+      client = newClient;
+      Serial.println("Client connected");
+      client.println("OK,CONNECTED");
+    }
+  } else {
+    String cmd = readLine(client);
+
+    if (cmd.length() > 0) {
+      Serial.print("RX: ");
+      Serial.println(cmd);
+
+      String reply = handleCommand(cmd);
+
+      Serial.print("TX: ");
+      Serial.println(reply);
+
+      client.println(reply);
+    }
+
+    if (!client.connected()) {
+      client.stop();
+      Serial.println("Client disconnected");
+    }
+  }
+
+}
+
+//*****************************************************************************************************
+// Ethernet: Read one line from TCP
+//*****************************************************************************************************
+String readLine(EthernetClient &c) {
+  static String line = "";
+
+  while (c.available()) {
+    char ch = c.read();
+
+    if (ch == '\r') continue;
+
+    if (ch == '\n') {
+      String out = line;
+      line = "";
+      out.trim();
+      return out;
+    }
+
+    line += ch;
+
+    // prevent runaway line length
+    if (line.length() > 150) {
+      line = "";
+      return "ERROR_LINE_TOO_LONG";
+    }
+  }
+
+  return "";
+}
+
+//*****************************************************************************************************
+// Ethernet: Command handler
+//*****************************************************************************************************
+String handleCommand(const String &cmd) {
+  ParsedCommand pc = parseCommand(cmd);
+  return executeCommand(pc);
+}
+
+//***********************************************************
 // Device - Solenoids / Tank Fill
 //***********************************************************
 void solenoid_controller(uint8_t solenoid_no, PinStatus status){  //  Turns the solenoids On (HIGH) or Off (LOW)
@@ -84,30 +549,20 @@ void solenoid_controller(uint8_t solenoid_no, PinStatus status){  //  Turns the 
 //***********************************************************
 // Device - Needle Valves / Flow Control
 //***********************************************************
-void needleValve_controller(int needleValveNo){
-
-  //Set the values of the voltages for the four needleValves??????
-
-  //  Write the voltage values to the needleValves
-  MachineControl_AnalogOut.write(needleValveNo, voltageNV[needleValveNo]);
-  //MachineControl_AnalogOut.write(NEEDLE_VALVE_2, voltageNV1);
-  //MachineControl_AnalogOut.write(NEEDLE_VALVE_3, voltageNV2);
-  //MachineControl_AnalogOut.write(NEEDLE_VALVE_4, voltageNV3);
-
-  // Voltage ramp TESTING !!!!!!!
-  voltageNV[needleValveNo] += 0.1;
-  delay(500);  // allow 10V -> 0V transition
-  if (voltageNV[needleValveNo] >= 10.0) {
-    voltageNV[needleValveNo] = 0;
-    delay(500);  // allow 10V -> 0V transition
-  }
-}
-
 void needleValve_reset(int needleValveNo){
   //  Write the voltage values to the needleValves
   voltageNV[needleValveNo] = 0.0;
   MachineControl_AnalogOut.write(needleValveNo, voltageNV[needleValveNo]);
 
+}
+
+void needleValve_controller(int needleValveNo, float volts) {
+  if (needleValveNo < 0 || needleValveNo > 3) return;
+
+  valveSetpoint[needleValveNo] = volts;
+
+  //  Write the voltage values to the needleValves
+  MachineControl_AnalogOut.write(needleValveNo, volts);
 }
 
 //***********************************************************
@@ -271,6 +726,7 @@ bool readLoadCells() {
   lcWeight[1] = pkt.lc2;
   lcWeight[2] = pkt.lc3;
   lcWeight[3] = pkt.lc4;
+  lastSeq = pkt.sequence;
 
   for (int i = 0; i < 4; i++) {
     if (abs(lcWeight[i]) < 0.005f) {
@@ -369,13 +825,12 @@ void runActiveMode(void){
         // Check weight of load cell 0
         // if not full open solennoid 0
         readLoadCells();
-        
         solenoid_controller(0, HIGH);
       break;
 
     case MODE_BALANCE:
       // balance code here
-      needleValve_controller(0);
+      needleValve_controller(0,3);
       break;
 
     case MODE_TEST:
@@ -398,6 +853,17 @@ void setup() {
   serialActive = Serial;  //Serial comms watchdog to prevent lock up
 
   Wire.begin();
+
+  // Bring up Ethernet with a static IP
+  Ethernet.begin(mac, ip, dns, gateway, subnet);
+  delay(1000);
+
+  server.begin();
+
+  Serial.println("Portenta TCP server starting...");
+  Serial.print("IP: ");
+  Serial.println(Ethernet.localIP());
+  Serial.println("TCP port: 5000");
 
   if (serialActive) {
     Serial.println("*********EML Calibrator*********");
@@ -439,5 +905,7 @@ void loop() {
 
   readSelectedSerialMode();
   runActiveMode();
+
+  ethernetClientActive();
   delay(10);
 }

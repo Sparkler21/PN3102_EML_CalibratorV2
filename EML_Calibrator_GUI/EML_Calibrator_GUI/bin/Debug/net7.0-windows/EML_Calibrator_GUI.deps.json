@@ -1,0 +1,23 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v7.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v7.0": {
+      "EML_Calibrator_GUI/1.0.0": {
+        "runtime": {
+          "EML_Calibrator_GUI.dll": {}
+        }
+      }
+    }
+  },
+  "libraries": {
+    "EML_Calibrator_GUI/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}
