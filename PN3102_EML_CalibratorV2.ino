@@ -37,14 +37,11 @@ static const uint8_t XIAO_ADDR = 0x2A;
 OperationMode mode = MODE_IDLE;
 
 //Load Cell Globals
-
-SPISettings adsSpiSettings(1000000, MSBFIRST, SPI_MODE1);
+float lcWeight[4] = {0};
+//SPISettings adsSpiSettings(1000000, MSBFIRST, SPI_MODE1);
 
 //  Voltage levels (0-10V) to control water flow / needlevalves
-float voltageNV1 = 0;
-//float voltageNV2 = 0;
-//float voltageNV3 = 0;
-//float voltageNV4 = 0;
+float voltageNV[4] = {0};
 
 // Raingauge channel counts
 unsigned long pulseCountRG1A = 0;   // total pulses counted on RG1 chA
@@ -106,22 +103,30 @@ void solenoid_controller(uint8_t solenoid_no, PinStatus status){  //  Turns the 
 //NeedleValves for delivering
 //accurate flow to gauges
 //****************************
-void needleValve_controller(void){
+void needleValve_controller(int needleValveNo){
 
   //Set the values of the voltages for the four needleValves??????
 
   //  Write the voltage values to the needleValves
-  MachineControl_AnalogOut.write(NEEDLE_VALVE_1, voltageNV1);
+  MachineControl_AnalogOut.write(needleValveNo, voltageNV[needleValveNo]);
   //MachineControl_AnalogOut.write(NEEDLE_VALVE_2, voltageNV1);
   //MachineControl_AnalogOut.write(NEEDLE_VALVE_3, voltageNV2);
   //MachineControl_AnalogOut.write(NEEDLE_VALVE_4, voltageNV3);
 
   // Voltage ramp TESTING !!!!!!!
-  voltageNV1 += 0.1;
-  if (voltageNV1 >= 10.0) {
-    voltageNV1 = 0;
-    delay(100);  // allow 10V -> 0V transition
+  voltageNV[needleValveNo] += 0.1;
+  delay(500);  // allow 10V -> 0V transition
+  if (voltageNV[needleValveNo] >= 10.0) {
+    voltageNV[needleValveNo] = 0;
+    delay(500);  // allow 10V -> 0V transition
   }
+}
+
+void needleValve_reset(int needleValveNo){
+  //  Write the voltage values to the needleValves
+  voltageNV[needleValveNo] = 0.0;
+  MachineControl_AnalogOut.write(needleValveNo, voltageNV[needleValveNo]);
+
 }
 
 //****************************
@@ -200,7 +205,7 @@ void serial_debug(void){
   // Print values if Serial is connected
   if (serialActive) {
     Serial.print("NV1: ");
-    Serial.print(voltageNV1);
+    Serial.print(voltageNV[0]);
     Serial.print(" V, RG1A: ");
     Serial.print(pulseCountRG1A);
     Serial.print(" , RG1B: ");
@@ -242,8 +247,8 @@ void led_heartbeat(void){
   }
 }
 
-void readI2C_LoadCells() {
-  WeightPacket pkt;
+bool readLoadCells() {
+  WeightPacket pkt = {0};
 
   Wire.requestFrom(XIAO_ADDR, (uint8_t)sizeof(pkt));
 
@@ -252,6 +257,10 @@ void readI2C_LoadCells() {
 
   while (Wire.available() && i < sizeof(pkt)) {
     p[i++] = Wire.read();
+  }
+
+  if (i != sizeof(pkt)) {
+    return false;
   }
 
   if (i == sizeof(pkt)) {
@@ -276,8 +285,20 @@ void readI2C_LoadCells() {
     Serial.println(i);
   }
 
-  delay(500);
+  lcWeight[0] = pkt.lc1;
+  lcWeight[1] = pkt.lc2;
+  lcWeight[2] = pkt.lc3;
+  lcWeight[3] = pkt.lc4;
+
+  for (int i = 0; i < 4; i++) {
+    if (abs(lcWeight[i]) < 0.005f) {
+      lcWeight[i] = 0.0f;
+    }
+  }
+
+  return true;
 }
+
 
 //*****************************************************************************************************
 //SETUP
@@ -399,11 +420,8 @@ void loop() {
         break;
 
       case '0':
-        if (mode == MODE_SETUP) {
           mode = MODE_IDLE;
-          Serial.println("Exiting SETUP.");
           printMenu();
-        }
         break;
 
       default:
@@ -417,21 +435,28 @@ void loop() {
   switch (mode) {
 
     case MODE_IDLE:
-        //Turn off solenoids
-        solenoid_controller(0, LOW);
+
+      for (int i = 0; i < 4; i++) {
+        //Turn off all solenoids
+        solenoid_controller(i, LOW);
+        //Shut all Needle Valves
+        needleValve_reset(i);
+      }
+
       break;
 
     case MODE_SETUP:
         // FILL TANK 0
         // Check weight of load cell 0
         // if not full open solennoid 0
-        readI2C_LoadCells();
+        readLoadCells();
         
         solenoid_controller(0, HIGH);
       break;
 
     case MODE_BALANCE:
       // balance code here
+      needleValve_controller(0);
       break;
 
     case MODE_TEST:
