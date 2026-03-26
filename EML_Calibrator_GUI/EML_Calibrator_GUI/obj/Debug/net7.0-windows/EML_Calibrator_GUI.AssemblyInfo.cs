@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("EML_Calibrator_GUI")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+60becb9b5089cd807a452cc697092f5de071b836")]
 [assembly: System.Reflection.AssemblyProductAttribute("EML_Calibrator_GUI")]
 [assembly: System.Reflection.AssemblyTitleAttribute("EML_Calibrator_GUI")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

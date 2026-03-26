@@ -886,12 +886,12 @@ void setup() {
 
   // Initialize analog outputs - Needle Valves
   MachineControl_AnalogOut.begin();
-  for (int nv = 0; nv < 4; nv++) {
-    MachineControl_AnalogOut.setPeriod(nv, PERIOD_MS);  // Set period (ms)
+  for (int channel = 0; channel < 4; channel++) {
+    MachineControl_AnalogOut.setPeriod(channel, PERIOD_MS);  // Set period (ms)
   }
   // Initialize digtal outputs - Solenoids
-  for (int sd = 0; sd < 4; sd++) {
-    solenoid_controller(sd, LOW);  // Turn off solenoid 1 to 4
+  for (int channel = 0; channel < 4; channel++) {
+    solenoid_controller(channel, LOW);  // Turn off solenoid 1 to 4
   }
 
   delay(1000);  // allow setups to settle 

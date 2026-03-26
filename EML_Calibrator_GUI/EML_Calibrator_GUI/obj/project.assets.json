@@ -8,23 +8,23 @@
     "net7.0-windows7.0": []
   },
   "packageFolders": {
-    "C:\\Users\\MarkDutton\\.nuget\\packages\\": {},
+    "C:\\Users\\C2029069\\.nuget\\packages\\": {},
     "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages": {}
   },
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "C:\\Users\\MarkDutton\\Git\\PN3102_EML_CalibratorV2\\EML_Calibrator_GUI\\EML_Calibrator_GUI\\EML_Calibrator_GUI.csproj",
+      "projectUniqueName": "C:\\Users\\C2029069\\Git\\PN3102_EML_CalibratorV2\\EML_Calibrator_GUI\\EML_Calibrator_GUI\\EML_Calibrator_GUI.csproj",
       "projectName": "EML_Calibrator_GUI",
-      "projectPath": "C:\\Users\\MarkDutton\\Git\\PN3102_EML_CalibratorV2\\EML_Calibrator_GUI\\EML_Calibrator_GUI\\EML_Calibrator_GUI.csproj",
-      "packagesPath": "C:\\Users\\MarkDutton\\.nuget\\packages\\",
-      "outputPath": "C:\\Users\\MarkDutton\\Git\\PN3102_EML_CalibratorV2\\EML_Calibrator_GUI\\EML_Calibrator_GUI\\obj\\",
+      "projectPath": "C:\\Users\\C2029069\\Git\\PN3102_EML_CalibratorV2\\EML_Calibrator_GUI\\EML_Calibrator_GUI\\EML_Calibrator_GUI.csproj",
+      "packagesPath": "C:\\Users\\C2029069\\.nuget\\packages\\",
+      "outputPath": "C:\\Users\\C2029069\\Git\\PN3102_EML_CalibratorV2\\EML_Calibrator_GUI\\EML_Calibrator_GUI\\obj\\",
       "projectStyle": "PackageReference",
       "fallbackFolders": [
         "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
       ],
       "configFilePaths": [
-        "C:\\Users\\MarkDutton\\AppData\\Roaming\\NuGet\\NuGet.Config",
+        "C:\\Users\\C2029069\\AppData\\Roaming\\NuGet\\NuGet.Config",
         "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config",
         "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
       ],
@@ -33,6 +33,7 @@
       ],
       "sources": {
         "C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\": {},
+        "C:\\Program Files\\dotnet\\library-packs": {},
         "https://api.nuget.org/v3/index.json": {}
       },
       "frameworks": {
@@ -45,7 +46,13 @@
         "warnAsError": [
           "NU1605"
         ]
-      }
+      },
+      "restoreAuditProperties": {
+        "enableAudit": "true",
+        "auditLevel": "low",
+        "auditMode": "direct"
+      },
+      "SdkAnalysisLevel": "9.0.300"
     },
     "frameworks": {
       "net7.0-windows7.0": {
@@ -61,6 +68,24 @@
         ],
         "assetTargetFallback": true,
         "warn": true,
+        "downloadDependencies": [
+          {
+            "name": "Microsoft.AspNetCore.App.Ref",
+            "version": "[7.0.20, 7.0.20]"
+          },
+          {
+            "name": "Microsoft.NETCore.App.Host.win-x64",
+            "version": "[7.0.20, 7.0.20]"
+          },
+          {
+            "name": "Microsoft.NETCore.App.Ref",
+            "version": "[7.0.20, 7.0.20]"
+          },
+          {
+            "name": "Microsoft.WindowsDesktop.App.Ref",
+            "version": "[7.0.20, 7.0.20]"
+          }
+        ],
         "frameworkReferences": {
           "Microsoft.NETCore.App": {
             "privateAssets": "all"
@@ -69,7 +94,7 @@
             "privateAssets": "none"
           }
         },
-        "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\7.0.401\\RuntimeIdentifierGraph.json"
+        "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.312\\RuntimeIdentifierGraph.json"
       }
     }
   }

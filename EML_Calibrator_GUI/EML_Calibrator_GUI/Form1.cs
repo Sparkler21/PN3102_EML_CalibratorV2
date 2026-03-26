@@ -15,7 +15,23 @@ namespace EML_Calibrator_GUI
         public Form1()
         {
             InitializeComponent();
+            InitialiseGaugeModeCombos();
             SetConnectedState(false);
+        }
+
+        private void InitialiseGaugeModeCombos()
+        {
+            string[] modes = { "Disabled", "Single", "Dual" };
+
+            cmbGauge1Mode.Items.AddRange(modes);
+            cmbGauge2Mode.Items.AddRange(modes);
+            cmbGauge3Mode.Items.AddRange(modes);
+            cmbGauge4Mode.Items.AddRange(modes);
+
+            cmbGauge1Mode.SelectedIndex = 0;
+            cmbGauge2Mode.SelectedIndex = 0;
+            cmbGauge3Mode.SelectedIndex = 0;
+            cmbGauge4Mode.SelectedIndex = 0;
         }
 
         private async void btnConnect_Click(object sender, EventArgs e)
@@ -46,6 +62,11 @@ namespace EML_Calibrator_GUI
         private async void btnSend_Click(object sender, EventArgs e)
         {
             await SendCommandAsync(txtCommand.Text.Trim());
+        }
+
+        private async void btnSendGaugeSetup_Click(object sender, EventArgs e)
+        {
+            await SendGaugeSetupAsync();
         }
 
         private async void txtCommand_KeyDown(object sender, KeyEventArgs e)
@@ -118,6 +139,45 @@ namespace EML_Calibrator_GUI
             btnStatus.Enabled = connected;
             btnWeights.Enabled = connected;
             btnSend.Enabled = connected;
+            btnSendGaugeSetup.Enabled = connected;
+
+            cmbGauge1Mode.Enabled = connected;
+            cmbGauge2Mode.Enabled = connected;
+            cmbGauge3Mode.Enabled = connected;
+            cmbGauge4Mode.Enabled = connected;
+        }
+
+        private int GetGaugeModeValue(ComboBox comboBox)
+        {
+            return comboBox.SelectedItem?.ToString() switch
+            {
+                "Single" => 1,
+                "Dual" => 2,
+                _ => 0,
+            };
+        }
+
+        private async Task SendGaugeSetupAsync()
+        {
+            if (_writer == null || _reader == null)
+                return;
+
+            int[] modes =
+            {
+                GetGaugeModeValue(cmbGauge1Mode),
+                GetGaugeModeValue(cmbGauge2Mode),
+                GetGaugeModeValue(cmbGauge3Mode),
+                GetGaugeModeValue(cmbGauge4Mode)
+            };
+
+            Log($"Applying gauge setup: G1={cmbGauge1Mode.Text}, G2={cmbGauge2Mode.Text}, G3={cmbGauge3Mode.Text}, G4={cmbGauge4Mode.Text}");
+
+            for (int gauge = 1; gauge <= 4; gauge++)
+            {
+                await SendCommandAsync($"SET_GAUGE_MODE,{gauge},{modes[gauge - 1]}");
+            }
+
+            await SendCommandAsync("GET_GAUGE_CONFIG");
         }
 
         private async Task SendCommandAsync(string command)
