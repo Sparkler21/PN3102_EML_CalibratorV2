@@ -1,6 +1,8 @@
 using System;
+using System.Globalization;
 using System.IO;
 using System.Net.Sockets;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -11,13 +13,18 @@ namespace EML_Calibrator_GUI
         private TcpClient? _client;
         private StreamReader? _reader;
         private StreamWriter? _writer;
+        private bool _polling;
 
         public Form1()
         {
             InitializeComponent();
             SetConnectedState(false);
+            SetDefaultGaugeSelections();
+            ResetVisuals();
+        }
 
-            // Default gauge selections
+        private void SetDefaultGaugeSelections()
+        {
             cbGaugeType1.SelectedIndex = 0;
             cbGaugeType2.SelectedIndex = 0;
             cbGaugeType3.SelectedIndex = 0;
@@ -32,6 +39,19 @@ namespace EML_Calibrator_GUI
             cbTargetCf2.SelectedIndex = 0;
             cbTargetCf3.SelectedIndex = 0;
             cbTargetCf4.SelectedIndex = 0;
+        }
+
+        private void ResetVisuals()
+        {
+            UpdateTankDisplay(1, 0.0);
+            UpdateTankDisplay(2, 0.0);
+            UpdateTankDisplay(3, 0.0);
+            UpdateTankDisplay(4, 0.0);
+
+            lblCount1.Text = "0";
+            lblCount2.Text = "0";
+            lblCount3.Text = "0";
+            lblCount4.Text = "0";
         }
 
         private async void btnConnect_Click(object sender, EventArgs e)
@@ -79,7 +99,6 @@ namespace EML_Calibrator_GUI
             await SendGaugeSetupAsync(2, cbGaugeType2.Text, cbReeds2.Text, cbTargetCf2.Text);
             await SendGaugeSetupAsync(3, cbGaugeType3.Text, cbReeds3.Text, cbTargetCf3.Text);
             await SendGaugeSetupAsync(4, cbGaugeType4.Text, cbReeds4.Text, cbTargetCf4.Text);
-
             await SendCommandAsync("GET_GAUGE_CONFIG");
         }
 
@@ -119,7 +138,10 @@ namespace EML_Calibrator_GUI
                 if (!string.IsNullOrWhiteSpace(banner))
                 {
                     Log($"RX: {banner}");
+                    ProcessReply(banner);
                 }
+
+                pollTimer.Start();
             }
             catch (Exception ex)
             {
@@ -130,6 +152,8 @@ namespace EML_Calibrator_GUI
 
         private void Disconnect()
         {
+            pollTimer.Stop();
+
             _reader?.Dispose();
             _writer?.Dispose();
             _client?.Close();
@@ -164,12 +188,131 @@ namespace EML_Calibrator_GUI
                 await _writer.WriteLineAsync(command);
 
                 string? reply = await _reader.ReadLineAsync();
-                Log($"RX: {reply ?? "<no reply>"}");
+                string shown = reply ?? "<no reply>";
+                Log($"RX: {shown}");
+
+                if (!string.IsNullOrWhiteSpace(reply))
+                {
+                    ProcessReply(reply);
+                }
             }
             catch (Exception ex)
             {
                 Log($"ERROR: {ex.Message}");
                 Disconnect();
+            }
+        }
+
+        private void ProcessReply(string reply)
+        {
+            if (reply.StartsWith("WEIGHTS,", StringComparison.OrdinalIgnoreCase))
+            {
+                ParseWeights(reply);
+                return;
+            }
+
+            if (reply.StartsWith("GAUGE_STATUS,", StringComparison.OrdinalIgnoreCase))
+            {
+                ParseGaugeStatus(reply);
+            }
+        }
+
+        private void ParseWeights(string reply)
+        {
+            string[] parts = reply.Split(',');
+            if (parts.Length < 5)
+                return;
+
+            UpdateTankDisplay(1, ParseDouble(parts[1]));
+            UpdateTankDisplay(2, ParseDouble(parts[2]));
+            UpdateTankDisplay(3, ParseDouble(parts[3]));
+            UpdateTankDisplay(4, ParseDouble(parts[4]));
+        }
+
+        private void ParseGaugeStatus(string reply)
+        {
+            Match m = Regex.Match(reply,
+                @"^GAUGE_STATUS,(\d+),.*?,.*?,.*?,.*?,.*?,.*?,(\d+),",
+                RegexOptions.IgnoreCase);
+
+            if (!m.Success)
+                return;
+
+            int gauge = int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+            int count = int.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture);
+            SetGaugeCount(gauge, count);
+        }
+
+        private static double ParseDouble(string s)
+        {
+            _ = double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out double value);
+            return value;
+        }
+
+        private void UpdateTankDisplay(int gaugeNumber, double weightKg)
+        {
+            weightKg = Math.Max(0.0, Math.Min(10.0, weightKg));
+            int fillHeight = (int)Math.Round((weightKg / 10.0) * 180.0);
+            fillHeight = Math.Max(2, fillHeight);
+
+            Panel fillPanel;
+            Label weightLabel;
+
+            switch (gaugeNumber)
+            {
+                case 1:
+                    fillPanel = pnlTankFill1;
+                    weightLabel = lblWeight1;
+                    break;
+                case 2:
+                    fillPanel = pnlTankFill2;
+                    weightLabel = lblWeight2;
+                    break;
+                case 3:
+                    fillPanel = pnlTankFill3;
+                    weightLabel = lblWeight3;
+                    break;
+                case 4:
+                    fillPanel = pnlTankFill4;
+                    weightLabel = lblWeight4;
+                    break;
+                default:
+                    return;
+            }
+
+            fillPanel.Height = fillHeight;
+            fillPanel.Top = 188 - fillHeight;
+            weightLabel.Text = $"{weightKg:0.000} kg";
+        }
+
+        private void SetGaugeCount(int gaugeNumber, int count)
+        {
+            switch (gaugeNumber)
+            {
+                case 1: lblCount1.Text = count.ToString(CultureInfo.InvariantCulture); break;
+                case 2: lblCount2.Text = count.ToString(CultureInfo.InvariantCulture); break;
+                case 3: lblCount3.Text = count.ToString(CultureInfo.InvariantCulture); break;
+                case 4: lblCount4.Text = count.ToString(CultureInfo.InvariantCulture); break;
+            }
+        }
+
+        private async void pollTimer_Tick(object? sender, EventArgs e)
+        {
+            if (_polling || _writer == null || _reader == null)
+                return;
+
+            _polling = true;
+            try
+            {
+                await SendCommandAsync("GET_WEIGHTS");
+                await SendCommandAsync("GET_GAUGE_STATUS,1");
+                await SendCommandAsync("GET_GAUGE_STATUS,2");
+                await SendCommandAsync("GET_GAUGE_STATUS,3");
+                await SendCommandAsync("GET_GAUGE_STATUS,4");
+            }
+            finally
+            {
+                _polling = false;
             }
         }
 
