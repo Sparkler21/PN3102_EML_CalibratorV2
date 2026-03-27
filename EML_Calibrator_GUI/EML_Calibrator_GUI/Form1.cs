@@ -15,23 +15,23 @@ namespace EML_Calibrator_GUI
         public Form1()
         {
             InitializeComponent();
-            InitialiseGaugeModeCombos();
             SetConnectedState(false);
-        }
 
-        private void InitialiseGaugeModeCombos()
-        {
-            string[] modes = { "Disabled", "Single", "Dual" };
+            // Default gauge selections
+            cbGaugeType1.SelectedIndex = 0;
+            cbGaugeType2.SelectedIndex = 0;
+            cbGaugeType3.SelectedIndex = 0;
+            cbGaugeType4.SelectedIndex = 0;
 
-            cmbGauge1Mode.Items.AddRange(modes);
-            cmbGauge2Mode.Items.AddRange(modes);
-            cmbGauge3Mode.Items.AddRange(modes);
-            cmbGauge4Mode.Items.AddRange(modes);
+            cbReeds1.SelectedIndex = 0;
+            cbReeds2.SelectedIndex = 0;
+            cbReeds3.SelectedIndex = 0;
+            cbReeds4.SelectedIndex = 0;
 
-            cmbGauge1Mode.SelectedIndex = 0;
-            cmbGauge2Mode.SelectedIndex = 0;
-            cmbGauge3Mode.SelectedIndex = 0;
-            cmbGauge4Mode.SelectedIndex = 0;
+            cbTargetCf1.SelectedIndex = 0;
+            cbTargetCf2.SelectedIndex = 0;
+            cbTargetCf3.SelectedIndex = 0;
+            cbTargetCf4.SelectedIndex = 0;
         }
 
         private async void btnConnect_Click(object sender, EventArgs e)
@@ -64,11 +64,6 @@ namespace EML_Calibrator_GUI
             await SendCommandAsync(txtCommand.Text.Trim());
         }
 
-        private async void btnSendGaugeSetup_Click(object sender, EventArgs e)
-        {
-            await SendGaugeSetupAsync();
-        }
-
         private async void txtCommand_KeyDown(object sender, KeyEventArgs e)
         {
             if (e.KeyCode == Keys.Enter)
@@ -76,6 +71,22 @@ namespace EML_Calibrator_GUI
                 e.SuppressKeyPress = true;
                 await SendCommandAsync(txtCommand.Text.Trim());
             }
+        }
+
+        private async void btnSendGaugeSetup_Click(object sender, EventArgs e)
+        {
+            await SendGaugeSetupAsync(1, cbGaugeType1.Text, cbReeds1.Text, cbTargetCf1.Text);
+            await SendGaugeSetupAsync(2, cbGaugeType2.Text, cbReeds2.Text, cbTargetCf2.Text);
+            await SendGaugeSetupAsync(3, cbGaugeType3.Text, cbReeds3.Text, cbTargetCf3.Text);
+            await SendGaugeSetupAsync(4, cbGaugeType4.Text, cbReeds4.Text, cbTargetCf4.Text);
+
+            await SendCommandAsync("GET_GAUGE_CONFIG");
+        }
+
+        private async Task SendGaugeSetupAsync(int gaugeNumber, string gaugeType, string reedsFitted, string targetCf)
+        {
+            string command = $"SET_GAUGE,{gaugeNumber},{gaugeType},{reedsFitted},{targetCf}";
+            await SendCommandAsync(command);
         }
 
         private async Task ConnectAsync()
@@ -140,44 +151,6 @@ namespace EML_Calibrator_GUI
             btnWeights.Enabled = connected;
             btnSend.Enabled = connected;
             btnSendGaugeSetup.Enabled = connected;
-
-            cmbGauge1Mode.Enabled = connected;
-            cmbGauge2Mode.Enabled = connected;
-            cmbGauge3Mode.Enabled = connected;
-            cmbGauge4Mode.Enabled = connected;
-        }
-
-        private int GetGaugeModeValue(ComboBox comboBox)
-        {
-            return comboBox.SelectedItem?.ToString() switch
-            {
-                "Single" => 1,
-                "Dual" => 2,
-                _ => 0,
-            };
-        }
-
-        private async Task SendGaugeSetupAsync()
-        {
-            if (_writer == null || _reader == null)
-                return;
-
-            int[] modes =
-            {
-                GetGaugeModeValue(cmbGauge1Mode),
-                GetGaugeModeValue(cmbGauge2Mode),
-                GetGaugeModeValue(cmbGauge3Mode),
-                GetGaugeModeValue(cmbGauge4Mode)
-            };
-
-            Log($"Applying gauge setup: G1={cmbGauge1Mode.Text}, G2={cmbGauge2Mode.Text}, G3={cmbGauge3Mode.Text}, G4={cmbGauge4Mode.Text}");
-
-            for (int gauge = 1; gauge <= 4; gauge++)
-            {
-                await SendCommandAsync($"SET_GAUGE_MODE,{gauge},{modes[gauge - 1]}");
-            }
-
-            await SendCommandAsync("GET_GAUGE_CONFIG");
         }
 
         private async Task SendCommandAsync(string command)
